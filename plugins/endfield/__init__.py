@@ -29,6 +29,7 @@ from .aliases import add_alias, alias_targets
 from .commands import (
     EndfieldCandidate,
     CANDIDATE_SCORE_THRESHOLD,
+    EquipmentAttributeFilter,
     ParsedEndfieldCommand,
     ParsedLoadoutSpec,
     ROOT_ALIASES,
@@ -36,6 +37,7 @@ from .commands import (
     candidate_options,
     dev_visible_for_user,
     format_candidates,
+    format_equipment_attribute_filters,
     format_error,
     format_help,
     format_not_found,
@@ -44,6 +46,7 @@ from .commands import (
     normalize_alias_kind,
     parse_command,
     parse_candidate_selection,
+    parse_equipment_attribute_filters,
     parse_loadout_spec,
     parse_shortcut_command,
     score_candidate,
@@ -96,7 +99,7 @@ ENDFIELD_HELP_IMAGE_PATH = (
 )
 CARD_CACHE_TTL_SECONDS = 600.0
 CARD_CACHE_MAX_BYTES = 48 * 1024 * 1024
-CARD_RENDER_VERSION = "endfield-card-v26"
+CARD_RENDER_VERSION = "endfield-card-v27"
 CardCacheKey = tuple[str, str, str, str]
 _CARD_CACHE: AsyncTTLCache[CardCacheKey, bytes] = AsyncTTLCache(
     ttl_seconds=CARD_CACHE_TTL_SECONDS,
@@ -122,6 +125,7 @@ CONTENT_RENDERERS: dict[str, Renderer] = {
     "weapon_catalog": lambda key, source: _render_weapon_catalog(key, source),
     "equipment": lambda key, source: _render_equipment(key, source),
     "equipment_catalog": lambda key, source: _render_equipment_catalog(key, source),
+    "equipment_attribute": lambda key, source: _render_equipment_attribute(key, source),
 }
 
 SOURCE_CANDIDATE_RESOLVERS: dict[str, dict[str, Resolver]] = {
@@ -1097,6 +1101,19 @@ async def _resolve_equipment_candidates_fz(
             )
         ]
 
+    attribute_filters = parse_equipment_attribute_filters(query)
+    if attribute_filters:
+        return [
+            EndfieldCandidate(
+                kind="equipment_attribute",
+                key=_equipment_attribute_key(attribute_filters, rarity_filter),
+                display_name=format_equipment_attribute_filters(attribute_filters),
+                score=100,
+                source="fz",
+                reason="attribute",
+            )
+        ]
+
     catalog = await service.get_equipment_catalog_view(rarity_filter=rarity_filter)
     candidates: list[EndfieldCandidate] = []
     for group in catalog.groups:
@@ -1210,6 +1227,27 @@ async def _render_equipment(key: str, source: str = "") -> bytes | None:
     logger.info(
         f"[endfield] render kind=equipment data={data_seconds:.3f}s "
         f"draw={perf_counter() - draw_started:.3f}s"
+    )
+    return output
+
+
+async def _render_equipment_attribute(key: str, source: str = "") -> bytes | None:
+    if source and source != "fz":
+        return None
+    filters, rarity_filter = _parse_equipment_attribute_key(key)
+    if not filters:
+        return None
+    started = perf_counter()
+    try:
+        view = await service.get_equipment_attribute_catalog_view(filters, rarity_filter)
+    except ValueError:
+        return None
+    data_seconds = perf_counter() - started
+    draw_started = perf_counter()
+    output = await draw_equipment_catalog_card(view)
+    logger.info(
+        f"[endfield] render kind=equipment_attribute items={view.total_count} "
+        f"data={data_seconds:.3f}s draw={perf_counter() - draw_started:.3f}s"
     )
     return output
 
@@ -1368,7 +1406,9 @@ async def _clear_endfield_caches(scope: str) -> int:
     elif scope == "icon":
         removed += await clear_http_cache("endfield-assets")
     elif scope in {"operator", "weapon", "equipment"}:
-        cache_kinds = {scope, "equipment_catalog"} if scope == "equipment" else {scope}
+        cache_kinds = (
+            {scope, "equipment_catalog", "equipment_attribute"} if scope == "equipment" else {scope}
+        )
         removed += await _CARD_CACHE.clear(lambda key: key[1] in cache_kinds)
         removed += await clear_http_cache("endfield-api")
     return removed
@@ -1437,6 +1477,26 @@ def _parse_equipment_catalog_key(key: str) -> tuple[str, str]:
     if not separator:
         return ("" if key == "__all__" else str(key or ""), "gold")
     return group_name, rarity_filter or "gold"
+
+
+def _equipment_attribute_key(
+    filters: tuple[EquipmentAttributeFilter, ...],
+    rarity_filter: str,
+) -> str:
+    spec = "|".join(f"{item.role}:{item.attribute}" for item in filters)
+    return f"{rarity_filter or 'gold'}::{spec}"
+
+
+def _parse_equipment_attribute_key(key: str) -> tuple[tuple[EquipmentAttributeFilter, ...], str]:
+    rarity_filter, separator, spec = str(key or "").partition("::")
+    if not separator:
+        return (), "gold"
+    filters: list[EquipmentAttributeFilter] = []
+    for part in spec.split("|"):
+        role, _, attribute = part.partition(":")
+        if attribute:
+            filters.append(EquipmentAttributeFilter(attribute, role or "any"))
+    return tuple(filters), rarity_filter or "gold"
 
 
 def _rest(match: ArgVal) -> str:

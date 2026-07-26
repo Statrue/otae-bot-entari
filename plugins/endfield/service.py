@@ -3,11 +3,17 @@ from __future__ import annotations
 import asyncio
 import math
 import re
-from typing import Any
+from typing import Any, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
 from .client import WarfarinAPIError, WarfarinClient
-from .commands import AMBIGUITY_MARGIN, CLEAR_SCORE, score_candidate
+from .commands import (
+    AMBIGUITY_MARGIN,
+    CLEAR_SCORE,
+    EquipmentAttributeFilter,
+    format_equipment_attribute_filters,
+    score_candidate,
+)
 from .models import (
     EquipmentCatalogAttributeView,
     EquipmentCatalogGroupView,
@@ -43,6 +49,8 @@ from .sources import source_order
 
 
 INDEPENDENT_EQUIPMENT_GROUP_NAMES = frozenset({"纾难装备组", "涉渊装备组"})
+EQUIPMENT_ABILITY_ATTRIBUTES = {"Str": "力量", "Agi": "敏捷", "Wisd": "智识", "Will": "意志"}
+EQUIPMENT_ABILITY_WILDCARD = "通用"
 OPERATOR_ELEMENT_ORDER = {name: index for index, name in enumerate(("物理", "灼热", "电磁", "寒冷", "自然"))}
 OPERATOR_PROFESSION_ORDER = {
     name: index for index, name in enumerate(("近卫", "术师", "突击", "先锋", "重装", "辅助"))
@@ -298,6 +306,52 @@ class EndfieldService:
             [result for result in detail_results if isinstance(result, dict)],
         )
         return view
+
+    async def get_equipment_attribute_catalog_view(
+        self,
+        filters: Sequence[EquipmentAttributeFilter],
+        rarity_filter: str = "gold",
+    ) -> EquipmentCatalogView:
+        if not filters:
+            raise ValueError("FZ equipment attribute filter is empty")
+        raw = await self.client.fz_article_by_title("装备")
+        catalog = build_fz_equipment_catalog_view(raw, "", rarity_filter)
+        titles = [item.title for group in catalog.groups for item in group.items]
+        detail_raws = await self._fz_equipment_details(titles)
+        view = build_fz_equipment_attribute_catalog_view(raw, detail_raws, filters, rarity_filter)
+        # 套组效果对同组每件装备都一样，交全部详情让筛掉的那件也能补上说明。
+        _apply_fz_equipment_catalog_suit_effects(view, list(detail_raws.values()))
+        return view
+
+    async def _fz_equipment_details(self, titles: list[str]) -> dict[str, dict[str, Any]]:
+        """按属性筛选要用到每一件装备的词条，所以详情必须齐。
+
+        少一件详情就少一条结果，这里不做静默降级：失败的重试一轮（成功的已进
+        HTTP 缓存，重试只补拉失败的那几件），仍失败就抛出去按数据源故障回复，
+        而不是给出一份看起来完整、实际被截断的清单。
+        """
+        pending = list(titles)
+        details: dict[str, dict[str, Any]] = {}
+        error: Exception | None = None
+        for _ in range(2):
+            if not pending:
+                break
+            results = await asyncio.gather(
+                *(self.client.fz_article_by_title(title) for title in pending),
+                return_exceptions=True,
+            )
+            retry: list[str] = []
+            for title, result in zip(pending, results):
+                if isinstance(result, dict):
+                    details[title] = result
+                    continue
+                retry.append(title)
+                if isinstance(result, Exception):
+                    error = result
+            pending = retry
+        if pending:
+            raise error or WarfarinAPIError(f"FZ 装备详情获取失败：{pending[0]}")
+        return details
 
     async def get_operator_catalog_view(
         self,
@@ -1721,14 +1775,7 @@ def build_fz_equipment_catalog_view(
         current_group = _normalize_equipment_group_name(_first_text(entry, "group")) or "独立装备套组"
         if not name or not title:
             continue
-        attributes = [
-            EquipmentCatalogAttributeView(
-                label=_first_text(attribute, "label", "name"),
-                value=clean_text(_first_value(attribute, "value", "text")),
-            )
-            for attribute in (entry.get("attrList") or [])
-            if isinstance(attribute, dict) and _first_text(attribute, "label", "name")
-        ]
+        attributes = _fz_equipment_roster_attributes(entry)
         grouped.setdefault(current_group, []).append(
             EquipmentCatalogItemView(
                 name=name,
@@ -1761,6 +1808,153 @@ def build_fz_equipment_catalog_view(
         rarity_filter=rarity_filter,
         source_version=str(article.get("updatedAt") or "")[:10],
     )
+
+
+def _fz_equipment_roster_attributes(entry: dict[str, Any]) -> list[EquipmentCatalogAttributeView]:
+    attributes = [
+        EquipmentCatalogAttributeView(
+            label=_first_text(attribute, "label", "name"),
+            value=clean_text(_first_value(attribute, "value", "text")),
+        )
+        for attribute in (entry.get("attrList") or [])
+        if isinstance(attribute, dict) and _first_text(attribute, "label", "name")
+    ]
+    if attributes:
+        return attributes
+    return [
+        EquipmentCatalogAttributeView(label=clean_text(label))
+        for label in (entry.get("attrKeys") or [])
+        if clean_text(label)
+    ]
+
+
+def build_fz_equipment_attribute_catalog_view(
+    raw: dict[str, Any],
+    detail_raws: dict[str, dict[str, Any]],
+    filters: Sequence[EquipmentAttributeFilter],
+    rarity_filter: str = "gold",
+) -> EquipmentCatalogView:
+    if not filters:
+        raise ValueError("FZ equipment attribute filter is empty")
+
+    view = build_fz_equipment_catalog_view(raw, "", rarity_filter)
+    groups: list[EquipmentCatalogGroupView] = []
+    for group in view.groups:
+        items: list[EquipmentCatalogItemView] = []
+        for item in group.items:
+            detail = detail_raws.get(item.title)
+            if not isinstance(detail, dict):
+                continue
+            main, sub, extras = _fz_equipment_attribute_slots(detail)
+            if not _equipment_attributes_match(main, sub, filters):
+                continue
+            item.level = item.level or _fz_equipment_detail_level(detail)
+            item.main_attribute = main
+            item.sub_attribute = sub
+            item.attributes = [
+                attribute
+                for attribute in (
+                    EquipmentCatalogAttributeView(label=main, role="main") if main else None,
+                    EquipmentCatalogAttributeView(label=sub, role="sub") if sub else None,
+                    *extras,
+                )
+                if attribute is not None
+            ]
+            items.append(item)
+        if items:
+            groups.append(EquipmentCatalogGroupView(group.name, items))
+
+    # 主/副能力套组对任何属性组合都成立，排在具体属性匹配之后展示。
+    groups.sort(key=lambda group: all(_equipment_group_item_is_wildcard(item) for item in group.items))
+    attribute_filter = format_equipment_attribute_filters(filters)
+    if not groups:
+        raise ValueError(f"FZ equipment attribute filter not found: {attribute_filter}")
+    view.title = attribute_filter
+    view.attribute_filter = attribute_filter
+    view.groups = groups
+    view.total_count = sum(len(group.items) for group in groups)
+    return view
+
+
+def _fz_equipment_detail_level(raw: dict[str, Any]) -> int:
+    attrs = _fz_template_attrs(raw)
+    hero = attrs.get("hero") if isinstance(attrs.get("hero"), dict) else {}
+    return _to_int(_first_value(hero, "level", "maxLevel", "maxLv"))
+
+
+def _equipment_group_item_is_wildcard(item: EquipmentCatalogItemView) -> bool:
+    return EQUIPMENT_ABILITY_WILDCARD in {item.main_attribute, item.sub_attribute}
+
+
+def _fz_equipment_attribute_slots(
+    raw: dict[str, Any],
+) -> tuple[str, str, list[EquipmentCatalogAttributeView]]:
+    """Split a FZ equipment card into its 主属性、副属性 and remaining 词条.
+
+    FZ lists the ability rows right after the base 防御力 row, larger value
+    first, so the first ability row is the 主属性 and the second the 副属性.
+    The 集成实训 style rows carry no concrete attribute (they scale with the
+    wearer's own 主/副能力) and become wildcards that match every filter.
+    """
+    attrs = _fz_template_attrs(raw)
+    stats = attrs.get("stats") if isinstance(attrs.get("stats"), dict) else {}
+    rows = stats.get("rows") or []
+    slots: list[str] = []
+    extras: list[EquipmentCatalogAttributeView] = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get("isBase"):
+            continue
+        label = _first_text(row, "label", "name")
+        attribute = _fz_equipment_ability_attribute(row)
+        if attribute and len(slots) < 2 and not extras:
+            slots.append(attribute)
+            continue
+        if label:
+            extras.append(
+                EquipmentCatalogAttributeView(
+                    label=label,
+                    value=_format_equipment_stat(
+                        (row.get("values") or [row.get("value")])[-1],
+                        _equipment_stat_is_percent(row),
+                    ),
+                )
+            )
+    main = slots[0] if slots else ""
+    sub = slots[1] if len(slots) > 1 else ""
+    return main, sub, extras
+
+
+def _fz_equipment_ability_attribute(row: dict[str, Any]) -> str:
+    attribute = EQUIPMENT_ABILITY_ATTRIBUTES.get(str(row.get("attrType") or ""), "")
+    if attribute:
+        return attribute
+    composite = str(row.get("compositeAttr") or "")
+    if composite in {"Main", "Sub"} and str(row.get("modifierType") or "") == "BaseAddition":
+        return EQUIPMENT_ABILITY_WILDCARD
+    return ""
+
+
+def _equipment_attributes_match(
+    main: str,
+    sub: str,
+    filters: Sequence[EquipmentAttributeFilter],
+) -> bool:
+    for item in filters:
+        if item.role == "main":
+            matched = _equipment_attribute_slot_matches(main, item.attribute)
+        elif item.role == "sub":
+            matched = _equipment_attribute_slot_matches(sub, item.attribute)
+        else:
+            matched = _equipment_attribute_slot_matches(
+                main, item.attribute
+            ) or _equipment_attribute_slot_matches(sub, item.attribute)
+        if not matched:
+            return False
+    return True
+
+
+def _equipment_attribute_slot_matches(slot: str, attribute: str) -> bool:
+    return bool(slot) and slot in {attribute, EQUIPMENT_ABILITY_WILDCARD}
 
 
 def _apply_fz_equipment_catalog_suit_effects(

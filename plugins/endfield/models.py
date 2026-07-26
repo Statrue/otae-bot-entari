@@ -224,6 +224,7 @@ class EquipmentView:
 class EquipmentCatalogAttributeView:
     label: str
     value: str = ""
+    role: str = ""
 
 
 @dataclass(slots=True)
@@ -237,6 +238,8 @@ class EquipmentCatalogItemView:
     slot_type: str = "装备"
     icon_url: str = ""
     attributes: list[EquipmentCatalogAttributeView] = field(default_factory=list)
+    main_attribute: str = ""
+    sub_attribute: str = ""
 
 
 @dataclass(slots=True)
@@ -254,6 +257,7 @@ class EquipmentCatalogView:
     groups: list[EquipmentCatalogGroupView] = field(default_factory=list)
     total_count: int = 0
     rarity_filter: str = "gold"
+    attribute_filter: str = ""
     source_version: str = ""
 
 

@@ -1753,6 +1753,10 @@ def _render_equipment_catalog_html(
 .catalog-item-slot {{ padding:2px 5px; background:#dfe3e4; color:#465158; }}
 .catalog-attributes {{ display:flex; flex-wrap:wrap; gap:3px; margin-top:auto; padding-top:5px; }}
 .catalog-attribute {{ width:27px; height:27px; display:grid; place-items:center; background:#e5e8e8; }}
+.catalog-attribute.has-role {{ width:auto; display:flex; align-items:center; gap:1px; padding:0 3px 0 0; }}
+.catalog-attribute.role-main {{ background:#dae3ee; }}
+.catalog-attribute.role-sub {{ background:#e7e3d9; }}
+.catalog-attr-role {{ align-self:stretch; display:grid; place-items:center; padding:0 3px; background:rgba(32,37,42,.82); color:#fff; font-size:11px; font-weight:950; }}
 .catalog-footer {{ margin-top:12px; padding:10px 12px; display:flex; justify-content:space-between; border-top:3px solid #20252a; color:#6c757b; font-size:12px; font-weight:850; }}
 """
     return f"""<!doctype html>
@@ -1760,7 +1764,7 @@ def _render_equipment_catalog_html(
 <div class="equipment-catalog-card">
   <header class="catalog-header">
     <div class="catalog-title-row"><div class="catalog-title">{esc(view.title)}</div><div class="catalog-filter">{esc(rarity_label)}</div></div>
-    <div class="catalog-subtitle">{len(view.groups)} 个套组 · {view.total_count} 件装备 · 词条按装备数据顺序显示</div>
+    <div class="catalog-subtitle">{len(view.groups)} 个套组 · {view.total_count} 件装备 · {esc(equipment_catalog_note(view))}</div>
     {equipment_catalog_legend(view)}
   </header>
   {equipment_catalog_groups(view, item_icons)}
@@ -1813,9 +1817,7 @@ def equipment_catalog_item(
     if not icon:
         icon = '<span class="catalog-item-image-fallback">暂无图标</span>'
     attributes = "".join(
-        '<span class="catalog-attribute" '
-        f'title="{esc_attr(attribute.label)} {esc_attr(attribute.value)}">'
-        f'{equipment_catalog_attribute_icon(attribute)}</span>'
+        equipment_catalog_attribute_chip(attribute)
         for attribute in item.attributes
         if equipment_catalog_attribute_visible(attribute.label)
     )
@@ -1827,6 +1829,26 @@ def equipment_catalog_item(
         f'<div class="catalog-item-meta"><span class="catalog-item-slot">{esc(item.slot_type)}</span><span>Lv{esc(item.level or "--")}</span></div>'
         f'<div class="catalog-attributes">{attributes}</div>'
         '</div></article>'
+    )
+
+
+EQUIPMENT_ATTRIBUTE_ROLE_BADGES = {"main": "主", "sub": "副"}
+
+
+def equipment_catalog_note(view: EquipmentCatalogView) -> str:
+    if view.attribute_filter:
+        return f"按 {view.attribute_filter} 筛选 · 主副属性按装备词条顺序判定 · 通用为随干员主副能力变化"
+    return "词条按装备数据顺序显示"
+
+
+def equipment_catalog_attribute_chip(attribute: EquipmentCatalogAttributeView) -> str:
+    badge = EQUIPMENT_ATTRIBUTE_ROLE_BADGES.get(attribute.role, "")
+    classes = f"catalog-attribute has-role role-{attribute.role}" if badge else "catalog-attribute"
+    role_html = f'<span class="catalog-attr-role">{esc(badge)}</span>' if badge else ""
+    title = f"{badge}属性 {attribute.label}" if badge else f"{attribute.label} {attribute.value}"
+    return (
+        f'<span class="{classes}" title="{esc_attr(title.strip())}">'
+        f'{role_html}{equipment_catalog_attribute_icon(attribute)}</span>'
     )
 
 
@@ -1848,6 +1870,10 @@ def equipment_catalog_legend(view: EquipmentCatalogView) -> str:
 
 
 def equipment_catalog_layout(view: EquipmentCatalogView) -> tuple[int, int]:
+    if view.attribute_filter:
+        if view.total_count > 24:
+            return 1900, 8
+        return (1260, 5) if view.total_count > 8 else (1040, 4)
     is_specific_group = len(view.groups) == 1 and view.title == view.groups[0].name
     if not is_specific_group:
         return 1900, 8
@@ -2073,9 +2099,12 @@ def equipment_attribute_icon(label: str, image_class: str, fallback_class: str) 
 
 
 def clean_attribute_label(label: str) -> str:
+    stripped = label
     for token in ("伤害加成", "效率加成", "加成", "效率", "能力"):
-        label = label.replace(token, "")
-    return label[:2] or "属"
+        stripped = stripped.replace(token, "")
+    if len(stripped) < 2:
+        stripped = label
+    return stripped[:2] or "属"
 
 
 def _equipment_attribute_icon_filename(label: str) -> str:

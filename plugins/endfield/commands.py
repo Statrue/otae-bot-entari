@@ -38,7 +38,28 @@ SCOPE_LABELS = {
     "weapon": "武器",
     "equipment": "装备",
     "equipment_catalog": "装备套组",
+    "equipment_attribute": "装备",
 }
+
+EQUIPMENT_ATTRIBUTE_NAMES = {
+    "力量": "力量",
+    "strength": "力量",
+    "str": "力量",
+    "敏捷": "敏捷",
+    "agility": "敏捷",
+    "agi": "敏捷",
+    "智识": "智识",
+    "智力": "智识",
+    "wisdom": "智识",
+    "wisd": "智识",
+    "意志": "意志",
+    "will": "意志",
+}
+EQUIPMENT_ATTRIBUTE_SHORT_NAMES = {"力": "力量", "敏": "敏捷", "智": "智识", "意": "意志"}
+EQUIPMENT_ATTRIBUTE_ROLES = {"主": "main", "副": "sub", "main": "main", "sub": "sub"}
+EQUIPMENT_ATTRIBUTE_ROLE_LABELS = {"main": "主", "sub": "副"}
+_EQUIPMENT_ATTRIBUTE_SEPARATORS = re.compile(r"[+＋、,，/／|｜]+")
+_EQUIPMENT_ATTRIBUTE_NOISE = re.compile(r"^[-_:：·\s]*(?:属性|能力|词条)?[-_:：·\s]*")
 
 SHORTCUT_COMMANDS = {
     "efop": ("query", "operator"),
@@ -94,6 +115,12 @@ class EndfieldCandidate:
     score: int
     source: str = ""
     reason: str = ""
+
+
+@dataclass(frozen=True)
+class EquipmentAttributeFilter:
+    attribute: str
+    role: str = "any"
 
 
 @dataclass(frozen=True)
@@ -368,6 +395,7 @@ def format_help() -> str:
             "  /ef 武器 <名称> | /ef wp <名称>",
             "  /ef 装备 <名称> | /ef eq <名称>",
             "  /ef 装备（查看全部套组）| /ef 装备 <套组名>",
+            "  /zmd 装备 主力量 副敏捷（按主副属性筛选）",
             "  /ef 配装（交互输入干员、可选武器与装备）",
             "  /zmd 配装 佩丽卡 脉冲源石配件 脉冲甲 脉冲源石配件 超轻域手 角色潜能2 武器潜能3",
             "  /ef 搜索 <关键词> | /efs <关键词>",
@@ -378,6 +406,7 @@ def format_help() -> str:
             "干员速查：/ef 干员；可按元素或职业筛选，例如 /ef 干员 灼热、/ef 干员 术师。",
             "武器速查：/ef 武器；可按类型筛选，例如 /ef 武器 单手剑。",
             "装备目录：默认仅金色；--all 显示全部，--rarity 可选 gold、purple、blue、all。",
+            "装备属性筛选：主/副可省略，写“力量 敏捷”表示两条属性都要有；多条件同时满足才会列出。",
             "配装第一个名称固定为干员；之后武器与装备无需固定顺序，省略武器时自动使用推荐武器。干员/武器默认90级，角色/武器潜能默认5，装备词条默认3锻。",
             "潜能指定：追加“角色潜能2 武器潜能3”。",
             "武器技能指定：追加“武器技能1等级5”；可重复指定多个技能。",
@@ -409,6 +438,11 @@ def format_error(error: str) -> str:
 
 def format_not_found(scope: str, query: str) -> str:
     label = SCOPE_LABELS.get(scope, "内容")
+    if scope == "equipment_attribute":
+        return (
+            f"没有同时满足 {query} 的装备。\n"
+            "可以少写一条属性，例如 /zmd 装备 主力量；或加 --all 放开稀有度限制"
+        )
     return f"未找到{label}：{query}\n可以尝试 /ef 搜索 {query}"
 
 
@@ -560,6 +594,66 @@ def _parse_rarity_option(parts: list[str]) -> tuple[list[str], str, str]:
             return remaining, rarity, "只能指定一个装备稀有度"
         rarity = normalized
     return remaining, rarity, ""
+
+
+def parse_equipment_attribute_filters(query: str) -> tuple[EquipmentAttributeFilter, ...]:
+    """Read a query as 主/副属性 filters, e.g. “主力量 副敏捷”.
+
+    Returns an empty tuple when any token is not an attribute term, so the
+    caller can fall back to the normal name lookup.
+    """
+    tokens = _equipment_attribute_tokens(query)
+    if not tokens:
+        return ()
+    filters: list[EquipmentAttributeFilter] = []
+    for token in tokens:
+        parsed = _parse_equipment_attribute_token(token)
+        if parsed is None:
+            return ()
+        if parsed not in filters:
+            filters.append(parsed)
+    return tuple(filters)
+
+
+def format_equipment_attribute_filters(filters: Sequence[EquipmentAttributeFilter]) -> str:
+    return " · ".join(
+        f"{EQUIPMENT_ATTRIBUTE_ROLE_LABELS.get(item.role, '')}{item.attribute}" for item in filters
+    )
+
+
+def _equipment_attribute_tokens(query: str) -> list[str]:
+    parts = [
+        piece
+        for part in _split(query)
+        for piece in _EQUIPMENT_ATTRIBUTE_SEPARATORS.split(part)
+        if piece
+    ]
+    tokens: list[str] = []
+    pending_role = ""
+    for part in parts:
+        if part.lower() in EQUIPMENT_ATTRIBUTE_ROLES:
+            if pending_role:
+                return []
+            pending_role = part
+            continue
+        tokens.append(f"{pending_role}{part}")
+        pending_role = ""
+    return [] if pending_role else tokens
+
+
+def _parse_equipment_attribute_token(token: str) -> EquipmentAttributeFilter | None:
+    text = str(token or "").strip()
+    role = "any"
+    for prefix, value in EQUIPMENT_ATTRIBUTE_ROLES.items():
+        if len(text) > len(prefix) and text.lower().startswith(prefix):
+            role = value
+            text = text[len(prefix):]
+            break
+    text = _EQUIPMENT_ATTRIBUTE_NOISE.sub("", text).strip()
+    attribute = EQUIPMENT_ATTRIBUTE_NAMES.get(text.lower(), "")
+    if not attribute and role != "any":
+        attribute = EQUIPMENT_ATTRIBUTE_SHORT_NAMES.get(text, "")
+    return EquipmentAttributeFilter(attribute, role) if attribute else None
 
 
 def parse_loadout_spec(query: str, default_enhance: int = 3) -> tuple[ParsedLoadoutSpec | None, str]:

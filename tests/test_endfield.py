@@ -311,6 +311,42 @@ class EndfieldCommandParserTests(unittest.TestCase):
         self.assertEqual(parsed.scope, "weapon")
         self.assertEqual(parsed.query, "赤缨")
 
+    def test_equipment_attribute_filter_parsing(self):
+        def spec(query):
+            return [(item.role, item.attribute) for item in commands.parse_equipment_attribute_filters(query)]
+
+        self.assertEqual(spec("主力量 副敏捷"), [("main", "力量"), ("sub", "敏捷")])
+        self.assertEqual(spec("力量 敏捷"), [("any", "力量"), ("any", "敏捷")])
+        self.assertEqual(spec("力量+敏捷"), [("any", "力量"), ("any", "敏捷")])
+        self.assertEqual(spec("主 力量 副 敏捷"), [("main", "力量"), ("sub", "敏捷")])
+        self.assertEqual(spec("主属性力量"), [("main", "力量")])
+        self.assertEqual(spec("主力 副意"), [("main", "力量"), ("sub", "意志")])
+        self.assertEqual(spec("智力"), [("any", "智识")])
+        self.assertEqual(spec("main力量 sub敏捷"), [("main", "力量"), ("sub", "敏捷")])
+        self.assertEqual(spec("主力量 主力量"), [("main", "力量")])
+
+        self.assertEqual(spec("长息轻护甲"), [])
+        self.assertEqual(spec("力量 长息"), [])
+        self.assertEqual(spec("力"), [])
+        self.assertEqual(spec("主"), [])
+        self.assertEqual(spec(""), [])
+
+        self.assertEqual(
+            commands.format_equipment_attribute_filters(
+                commands.parse_equipment_attribute_filters("主力量 副敏捷")
+            ),
+            "主力量 · 副敏捷",
+        )
+
+    def test_equipment_attribute_query_keeps_scope_and_rarity(self):
+        parsed = commands.parse_command("装备 主力量 副敏捷")
+        self.assertEqual(parsed.scope, "equipment")
+        self.assertEqual(parsed.query, "主力量 副敏捷")
+
+        rarity = commands.parse_command("装备 力量 敏捷 --all")
+        self.assertEqual(rarity.query, "力量 敏捷")
+        self.assertEqual(rarity.rarity, "all")
+
     def test_search_aliases_and_scopes(self):
         parsed = commands.parse_command("搜索 陈")
         self.assertEqual(parsed.action, "search")
@@ -1026,6 +1062,83 @@ def _sample_fz_equipment_catalog():
                 ]
             }
         },
+    }
+
+
+def _sample_fz_equipment_details():
+    def ability(label, attr_type, value, composite="", modifier="BaseAddition"):
+        return {
+            "label": label,
+            "isBase": False,
+            "values": [value, value, value, value],
+            "attrType": attr_type,
+            "compositeAttr": composite,
+            "modifierType": modifier,
+            "valueFormat": "{value}",
+        }
+
+    def detail(name, level, rows):
+        return {
+            "article": {"title": f"装备/{name}", "updatedAt": "2026-07-20T00:00:00.000Z"},
+            "revision": {
+                "contentJson": {
+                    "content": [
+                        {
+                            "attrs": {
+                                "hero": {"name": name, "level": level, "slotType": "护甲"},
+                                "stats": {
+                                    "rows": [
+                                        {
+                                            "label": "防御力",
+                                            "isBase": True,
+                                            "values": [56, 56, 56, 56],
+                                            "attrType": "Def",
+                                            "modifierType": "BaseAddition",
+                                        },
+                                        *rows,
+                                    ]
+                                },
+                                "suit": {"groupName": "长息装备组"},
+                            }
+                        }
+                    ]
+                }
+            },
+        }
+
+    special = {
+        "label": "终结技充能效率",
+        "isBase": False,
+        "values": [0.123, 0.135, 0.147, 0.16],
+        "attrType": "UltimateSpGainScalar",
+        "modifierType": "BaseAddition",
+        "valueFormat": "{value:0.0%}",
+    }
+    return {
+        "装备/长息轻护甲": detail(
+            "长息轻护甲",
+            70,
+            [ability("力量", "Str", 87), ability("敏捷", "Agi", 58), special],
+        ),
+        "装备/长息护手": detail(
+            "长息护手",
+            70,
+            [ability("敏捷", "Agi", 87), ability("力量", "Str", 58)],
+        ),
+        "装备/巡行信使护甲": detail(
+            "巡行信使护甲",
+            60,
+            [ability("智识", "Wisd", 74), ability("意志", "Will", 49)],
+        ),
+        "装备/巡行信使护手": detail(
+            "巡行信使护手",
+            60,
+            [
+                ability("主能力", "Level", 74, "Main"),
+                ability("副能力", "Level", 49, "Sub"),
+                ability("副能力", "Level", 0.088, "Sub", "BaseMultiplier"),
+            ],
+        ),
     }
 
 
@@ -2339,6 +2452,154 @@ class EndfieldServiceTests(unittest.TestCase):
         self.assertEqual(blue.total_count, 1)
         self.assertEqual(blue.groups[0].items[0].name, "巡行信使护手")
 
+    def test_build_fz_equipment_attribute_catalog_filters_by_main_and_sub(self):
+        raw = _sample_fz_equipment_catalog()
+        details = _sample_fz_equipment_details()
+
+        def names(query, rarity_filter="gold"):
+            view = service.build_fz_equipment_attribute_catalog_view(
+                raw,
+                details,
+                commands.parse_equipment_attribute_filters(query),
+                rarity_filter,
+            )
+            return [item.name for group in view.groups for item in group.items]
+
+        self.assertEqual(names("主力量"), ["长息轻护甲"])
+        self.assertEqual(names("副力量"), ["长息护手"])
+        self.assertEqual(names("力量"), ["长息轻护甲", "长息护手"])
+        self.assertEqual(names("力量 敏捷"), ["长息轻护甲", "长息护手"])
+        self.assertEqual(names("主力量 副敏捷"), ["长息轻护甲"])
+        self.assertEqual(names("主智识 副意志", "purple"), ["巡行信使护甲"])
+
+        with self.assertRaises(ValueError):
+            names("主意志")
+
+    def test_build_fz_equipment_attribute_catalog_annotates_items(self):
+        view = service.build_fz_equipment_attribute_catalog_view(
+            _sample_fz_equipment_catalog(),
+            _sample_fz_equipment_details(),
+            commands.parse_equipment_attribute_filters("主力量 副敏捷"),
+        )
+
+        self.assertEqual(view.title, "主力量 · 副敏捷")
+        self.assertEqual(view.attribute_filter, "主力量 · 副敏捷")
+        self.assertEqual(view.total_count, 1)
+        item = view.groups[0].items[0]
+        self.assertEqual((item.main_attribute, item.sub_attribute), ("力量", "敏捷"))
+        self.assertEqual(item.level, 70)
+        self.assertEqual(
+            [(attribute.label, attribute.role) for attribute in item.attributes],
+            [("力量", "main"), ("敏捷", "sub"), ("终结技充能效率", "")],
+        )
+        self.assertEqual(item.attributes[2].value, "16%")
+
+    def test_build_fz_equipment_attribute_catalog_treats_main_sub_rows_as_wildcards(self):
+        raw = _sample_fz_equipment_catalog()
+        details = _sample_fz_equipment_details()
+
+        view = service.build_fz_equipment_attribute_catalog_view(
+            raw,
+            details,
+            commands.parse_equipment_attribute_filters("主意志 副智识"),
+            "all",
+        )
+
+        self.assertEqual(
+            [item.name for group in view.groups for item in group.items],
+            ["巡行信使护手"],
+        )
+        item = view.groups[0].items[0]
+        self.assertEqual((item.main_attribute, item.sub_attribute), ("通用", "通用"))
+        self.assertEqual([attribute.label for attribute in item.attributes], ["通用", "通用", "副能力"])
+
+        mixed = service.build_fz_equipment_attribute_catalog_view(
+            raw,
+            details,
+            commands.parse_equipment_attribute_filters("智识"),
+            "all",
+        )
+        self.assertEqual(
+            [group.name for group in mixed.groups],
+            ["巡行信使装备组"],
+        )
+        self.assertEqual(
+            [item.name for item in mixed.groups[0].items],
+            ["巡行信使护甲", "巡行信使护手"],
+        )
+
+    def test_equipment_attribute_catalog_view_fetches_details_and_suit_effects(self):
+        details = _sample_fz_equipment_details()
+        details["装备/长息轻护甲"] = _sample_fz_equipment()
+        client = types.SimpleNamespace(
+            fz_article_by_title=AsyncMock(
+                side_effect=lambda title: _sample_fz_equipment_catalog()
+                if title == "装备"
+                else details[title]
+            )
+        )
+
+        view = asyncio.run(
+            service.EndfieldService(client).get_equipment_attribute_catalog_view(
+                commands.parse_equipment_attribute_filters("副力量"),
+            )
+        )
+
+        self.assertEqual(view.attribute_filter, "副力量")
+        self.assertEqual([item.name for group in view.groups for item in group.items], ["长息护手"])
+        self.assertEqual(view.groups[0].suit_required_count, 3)
+        self.assertEqual(
+            [call.args[0] for call in client.fz_article_by_title.await_args_list],
+            ["装备", "装备/长息轻护甲", "装备/长息护手"],
+        )
+
+    def test_equipment_attribute_catalog_view_retries_a_failed_detail_once(self):
+        details = _sample_fz_equipment_details()
+        attempts = {"装备/长息护手": 0}
+
+        def article(title):
+            if title == "装备":
+                return _sample_fz_equipment_catalog()
+            if title == "装备/长息护手":
+                attempts[title] += 1
+                if attempts[title] == 1:
+                    raise service.WarfarinAPIError("FZ Wiki 请求超时")
+            return details[title]
+
+        client = types.SimpleNamespace(fz_article_by_title=AsyncMock(side_effect=article))
+
+        view = asyncio.run(
+            service.EndfieldService(client).get_equipment_attribute_catalog_view(
+                commands.parse_equipment_attribute_filters("力量"),
+            )
+        )
+
+        self.assertEqual(attempts["装备/长息护手"], 2)
+        self.assertEqual(
+            [item.name for group in view.groups for item in group.items],
+            ["长息轻护甲", "长息护手"],
+        )
+
+    def test_equipment_attribute_catalog_view_fails_when_a_detail_stays_missing(self):
+        details = _sample_fz_equipment_details()
+
+        def article(title):
+            if title == "装备":
+                return _sample_fz_equipment_catalog()
+            if title == "装备/长息护手":
+                raise service.WarfarinAPIError("FZ Wiki 请求超时")
+            return details[title]
+
+        client = types.SimpleNamespace(fz_article_by_title=AsyncMock(side_effect=article))
+
+        # 少一件详情就少一条结果，宁可报数据源故障也不给出被悄悄截断的清单。
+        with self.assertRaises(service.WarfarinAPIError):
+            asyncio.run(
+                service.EndfieldService(client).get_equipment_attribute_catalog_view(
+                    commands.parse_equipment_attribute_filters("主力量"),
+                )
+            )
+
     def test_equipment_catalog_loads_group_suit_effect_from_representative_item(self):
         client = types.SimpleNamespace(
             fz_article_by_title=AsyncMock(
@@ -2411,6 +2672,48 @@ class EndfieldServiceTests(unittest.TestCase):
         self.assertIn('<span class="vup"><strong>+16%</strong></span>', html)
         self.assertNotIn('title="\u9632\u5fa1\u529b ', html)
         self.assertNotIn('<span>\u9632\u5fa1\u529b</span>', html)
+
+    def test_render_equipment_attribute_catalog_card_html_marks_main_and_sub(self):
+        view = service.build_fz_equipment_attribute_catalog_view(
+            _sample_fz_equipment_catalog(),
+            _sample_fz_equipment_details(),
+            commands.parse_equipment_attribute_filters("力量"),
+        )
+        with patch.object(draw, "fetch_many", AsyncMock(return_value={})):
+            html = asyncio.run(render_equipment_catalog_card_html(view))
+
+        self.assertIn('<div class="catalog-title">力量</div>', html)
+        self.assertIn("按 力量 筛选", html)
+        self.assertIn('class="catalog-attribute has-role role-main"', html)
+        self.assertIn('class="catalog-attribute has-role role-sub"', html)
+        self.assertIn('<span class="catalog-attr-role">主</span>', html)
+        self.assertIn('<span class="catalog-attr-role">副</span>', html)
+        self.assertIn('title="主属性 力量"', html)
+        self.assertIn('title="副属性 力量"', html)
+        self.assertIn("width:1040px", html)
+        self.assertIn("Lv70", html)
+
+    def test_equipment_attribute_catalog_widens_with_result_count(self):
+        view = service.build_fz_equipment_attribute_catalog_view(
+            _sample_fz_equipment_catalog(),
+            _sample_fz_equipment_details(),
+            commands.parse_equipment_attribute_filters("力量"),
+        )
+
+        self.assertEqual(draw.equipment_catalog_layout(view), (1040, 4))
+        view.total_count = 16
+        self.assertEqual(draw.equipment_catalog_layout(view), (1260, 5))
+        view.total_count = 40
+        self.assertEqual(draw.equipment_catalog_layout(view), (1900, 8))
+
+    def test_equipment_attribute_query_is_wired_into_the_handler(self):
+        source = (ROOT / "plugins/endfield/__init__.py").read_text(encoding="utf-8")
+
+        self.assertIn('"equipment_attribute": lambda key, source: _render_equipment_attribute', source)
+        self.assertIn("attribute_filters = parse_equipment_attribute_filters(query)", source)
+        self.assertIn('kind="equipment_attribute"', source)
+        self.assertIn("get_equipment_attribute_catalog_view(filters, rarity_filter)", source)
+        self.assertIn('{scope, "equipment_catalog", "equipment_attribute"}', source)
 
     def test_render_specific_equipment_catalog_uses_compact_four_column_layout(self):
         view = build_fz_equipment_catalog_view(_sample_fz_equipment_catalog())

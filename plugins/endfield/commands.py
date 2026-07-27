@@ -35,6 +35,9 @@ GACHA_ALIASES = {"抽卡", "gacha"}
 GACHA_HISTORY_ALIASES = {"抽卡记录", "历史抽卡", "gacha-history", "history"}
 GACHA_SYNC_ALIASES = {"抽卡同步", "同步抽卡", "gacha-sync", "sync"}
 GACHA_IMPORT_ALIASES = {"抽卡导入", "小黑盒导入", "xhh-import", "gacha-import", "import"}
+MEDAL_ALIASES = {"奖章", "蚀刻章", "medal", "medals"}
+MEDAL_REFRESH_ALIASES = {"刷新", "refresh", "update"}
+MEDAL_MISSING_ALIASES = {"缺章", "未获得", "missing"}
 
 SCOPE_LABELS = {
     "operator": "干员",
@@ -286,6 +289,16 @@ def _parse_personal_command(parts: list[str]) -> ParsedEndfieldCommand | None:
         )
     if head in GACHA_ALIASES:
         return ParsedEndfieldCommand("gacha", account_selector=" ".join(parts[1:]).strip())
+    if head in MEDAL_ALIASES:
+        sub = parts[1].lower() if len(parts) > 1 else ""
+        if sub in MEDAL_REFRESH_ALIASES:
+            return ParsedEndfieldCommand("medal_refresh")
+        if sub in MEDAL_MISSING_ALIASES:
+            return ParsedEndfieldCommand(
+                "medal_missing",
+                account_selector=" ".join(parts[2:]).strip() or "主账号",
+            )
+        return ParsedEndfieldCommand("medal_view")
     return None
 
 
@@ -420,6 +433,9 @@ def format_help() -> str:
             "  /zmd 抽卡 [账号] | /zmd 抽卡同步 [账号] [--full]",
             "  /zmd 抽卡导入 [账号]（仅私聊，手机号验证码导入小黑盒历史统计）",
             "  /zmd 抽卡记录 [账号] [页码] [--池 <名称>]",
+            "  /zmd 奖章（查看蚀刻章总数与本版本新增）",
+            "  /zmd 奖章 刷新（重新抓取 FZ 数据并滚动对比基线）",
+            "  /zmd 奖章 缺章 [账号]（查询自己未获得/未升满/未镀层）",
             "  /zmd 速算 2腐蚀 200（效果可替换为导电或碎甲）",
             "  /zmd 版本日历（查看当前版本全部开放日程）",
             "",

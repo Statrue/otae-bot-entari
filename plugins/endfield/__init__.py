@@ -64,6 +64,8 @@ from .draw import (
     draw_equipment_card,
     draw_equipment_catalog_card,
     draw_loadout_card,
+    draw_medal_stats_card,
+    draw_medal_missing_card,
     draw_operator_card,
     draw_operator_catalog_card,
     draw_weapon_card,
@@ -104,6 +106,7 @@ from .service import (
     build_fz_weapon_catalog_view,
     format_status_quick_calc,
 )
+from .medal_store import MedalSnapshotStore
 from .sources import source_label, source_order
 from .version_calendar import AkeDataVersionCalendarSource, VersionCalendarError
 
@@ -116,6 +119,8 @@ account_store = EndfieldStore()
 official_client = EndfieldOfficialClient()
 calendar_source = AkeDataVersionCalendarSource(client)
 official_calendar_source = OfficialVersionCalendarSource()
+medal_store = MedalSnapshotStore()
+_MEDAL_LOCK = asyncio.Lock()
 ENDFIELD_HELP_IMAGE_PATH = (
     Path(__file__).resolve().parents[2] / "assets" / "image" / "help" / "endfield.png"
 )
@@ -263,7 +268,9 @@ async def _handle_command(matcher, event: Event, command: ParsedEndfieldCommand)
         return await matcher.finish(
             format_status_quick_calc(command.status_name, command.status_level, command.arts_strength)
         )
-    if command.action in {"bind", "accounts", "account_base", "primary", "unbind", "attendance", "gacha", "gacha_history", "gacha_sync", "gacha_import"}:
+    if command.action in {"medal_view", "medal_refresh"}:
+        return await _handle_medal(matcher, command)
+    if command.action in {"bind", "accounts", "account_base", "primary", "unbind", "attendance", "gacha", "gacha_history", "gacha_sync", "gacha_import", "medal_missing"}:
         return await _handle_personal_command(matcher, event, command)
     if command.action == "loadout":
         return await _handle_loadout(matcher, command)
@@ -354,6 +361,73 @@ async def _handle_command(matcher, event: Event, command: ParsedEndfieldCommand)
         return await matcher.finish("图片生成失败")
 
 
+async def _handle_medal(matcher, command: ParsedEndfieldCommand) -> None:
+    """F1：查看蚀刻章统计/新增；刷新时重抓 FZ 数据并滚动对比基线。"""
+    if command.action == "medal_refresh":
+        async with _MEDAL_LOCK:
+            await matcher.send("正在抓取 FZ 蚀刻章数据，约需 15–25 秒…")
+            started = perf_counter()
+            try:
+                snapshot = await service.fetch_medal_snapshot_fz()
+            except WarfarinAPIError as exc:
+                logger.warning(f"[endfield] medal refresh failed: {exc}")
+                return await matcher.finish("FZ 数据源暂时不可用，请稍后重试。")
+            await medal_store.replace_current(snapshot)
+            logger.info(
+                f"[endfield] medal snapshot refreshed medals={snapshot.total_count} "
+                f"time={perf_counter() - started:.1f}s"
+            )
+
+    current = medal_store.load_current_view()
+    if current is None:
+        return await matcher.finish("暂无蚀刻章数据，请先发送「/zmd 奖章 刷新」。")
+    previous = medal_store.load_previous_view()
+    try:
+        diff = service.build_medal_diff(current, previous)
+        pngs = await draw_medal_stats_card(diff)
+    except WarfarinAPIError as exc:
+        logger.warning(f"[endfield] medal card data failed: {exc}")
+        return await matcher.finish("数据源暂时不可用。")
+    except Exception as exc:
+        logger.exception(f"[endfield] medal card failed: {exc}")
+        return await matcher.finish("蚀刻章图片生成失败")
+    return await _finish_pngs(matcher, pngs)
+
+
+async def _handle_medal_missing(
+    matcher, qq_user_id: str, command: ParsedEndfieldCommand, cipher: CredentialCipher, *, group: bool
+) -> None:
+    """F2：查询绑定账号未获得/未升满/未镀层的蚀刻章。"""
+    role = account_store.resolve_role(qq_user_id, command.account_selector)
+    if role is None:
+        return await matcher.finish("未找到对应账号，请先私聊使用 /zmd 绑定。")
+    snapshot = medal_store.load_current_view()
+    if snapshot is None:
+        return await matcher.finish("暂无蚀刻章数据，请先发送「/zmd 奖章 刷新」建立快照。")
+    try:
+        async with ROLE_TASKS.claim(role):
+            token = account_store.decrypt_token(role, cipher)
+            raw_progress = await official_client.endfield_card_detail(token, role)
+    except EndfieldAPIError as exc:
+        logger.warning(f"[endfield-medal] player progress API failed: {exc}")
+        return await matcher.finish("奖章进度查询失败，请稍后重试。")
+    except CredentialKeyError as exc:
+        return await matcher.finish(str(exc))
+    except Exception as exc:
+        logger.exception(f"[endfield-medal] progress query failed: {exc}")
+        return await matcher.finish("奖章进度查询失败。")
+    view = service.build_medal_missing_view(
+        raw_progress, snapshot,
+        nickname=role.nickname, uid=role.masked_uid, server_name=role.server_name,
+    )
+    try:
+        pngs = await draw_medal_missing_card(view)
+    except Exception as exc:
+        logger.exception(f"[endfield-medal] missing card failed: {exc}")
+        return await matcher.finish("缺章图片生成失败")
+    return await _finish_pngs(matcher, pngs)
+
+
 async def _handle_personal_command(matcher, event: Event, command: ParsedEndfieldCommand) -> None:
     private_only = {"bind", "primary", "unbind", "gacha_import"}
     if command.action in private_only and is_group(event):
@@ -383,6 +457,9 @@ async def _handle_personal_command(matcher, event: Event, command: ParsedEndfiel
         if command.action == "attendance":
             cipher = CredentialCipher.from_env()
             return await _handle_attendance(matcher, qq_user_id, command, cipher, group=is_group(event))
+        if command.action == "medal_missing":
+            cipher = CredentialCipher.from_env()
+            return await _handle_medal_missing(matcher, qq_user_id, command, cipher, group=is_group(event))
         if command.action in {"gacha", "gacha_sync"}:
             cipher = CredentialCipher.from_env()
             return await _handle_gacha(matcher, qq_user_id, command, cipher, group=is_group(event))

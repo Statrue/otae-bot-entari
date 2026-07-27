@@ -13,9 +13,9 @@ class EndfieldSource:
 
 
 DATA_SOURCES: tuple[EndfieldSource, ...] = (
-    EndfieldSource("fz", "FZ Wiki", 10, frozenset({"operator", "weapon", "equipment", "stage"})),
+    EndfieldSource("fz", "FZ Wiki", 10, frozenset({"operator", "weapon", "equipment", "medal", "stage"})),
     EndfieldSource("akedata", "AkeData", 20, frozenset({"stage"})),
-    EndfieldSource("warfarin", "Warfarin Wiki", 20, frozenset({"operator", "weapon"})),
+    EndfieldSource("warfarin", "Warfarin Wiki", 20, frozenset({"operator", "weapon", "medal"})),
 )
 
 _SOURCE_BY_KEY = {source.key: source for source in DATA_SOURCES}

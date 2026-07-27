@@ -371,3 +371,68 @@ class GachaHistoryView:
     total: int
     pool_filter: str = ""
     items: list[GachaHistoryItemView] = field(default_factory=list)
+
+
+# ----- 蚀刻章/奖章（medal）模块 -----
+
+@dataclass(slots=True)
+class MedalItemView:
+    medal_id: str
+    name: str
+    category_name: str = ""
+    group_name: str = ""
+    init_level: int = 0
+    max_level: int = 0
+    can_be_upgraded: bool = False
+    can_be_plated: bool = False
+    order: int = 0
+    icon_url: str = ""
+    description: str = ""
+
+
+@dataclass(slots=True)
+class MedalSnapshotView:
+    """奖章全量快照：既是版本对比基线，也是命令读取的性能缓存。"""
+    medals: list[MedalItemView] = field(default_factory=list)
+    version: str = ""                       # FZ 根条目 updatedAt[:10] 标签
+    fetched_at: int = 0
+    source: str = "fz"
+    total_count: int = 0
+    level_counts: dict[int, int] = field(default_factory=dict)      # {max_level: 数量}
+    platable_count: int = 0
+    upgradable_count: int = 0
+    category_counts: dict[str, int] = field(default_factory=dict)   # {category_name: 数量}
+
+
+@dataclass(slots=True)
+class MedalDiffView:
+    """F1 版本对比视图：当前快照 + 相较上一版本的新增奖章。"""
+    current: MedalSnapshotView = field(default_factory=MedalSnapshotView)
+    previous_version: str = ""
+    new_medals: list[MedalItemView] = field(default_factory=list)
+
+
+# ----- Phase 2：个人缺章（F2） -----
+
+@dataclass(slots=True)
+class MedalProgressView:
+    """SDK 玩家奖章进度归一化，按 medal_id 索引。"""
+    medal_id: str = ""
+    level: int = 0
+    plated: bool = False
+
+
+@dataclass(slots=True)
+class MedalMissingView:
+    """F2 个人缺章视图：未获得 / 未升满 / 未镀层。"""
+    nickname: str = ""
+    uid: str = ""
+    server_name: str = ""
+    snapshot_version: str = ""
+    total_count: int = 0
+    owned_count: int = 0
+    not_obtained: list[MedalItemView] = field(default_factory=list)
+    not_maxed: list[MedalItemView] = field(default_factory=list)
+    not_plated: list[MedalItemView] = field(default_factory=list)
+    truncated: bool = False
+    shown_count: int = 0

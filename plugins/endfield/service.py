@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import math
 import re
+import time
 from typing import Any, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
@@ -30,6 +31,11 @@ from .models import (
     LoadoutStatusEffectView,
     LoadoutStatusLevelView,
     LoadoutView,
+    MedalDiffView,
+    MedalItemView,
+    MedalMissingView,
+    MedalProgressView,
+    MedalSnapshotView,
     OperatorCatalogElementView,
     OperatorCatalogItemView,
     OperatorCatalogProfessionView,
@@ -371,6 +377,101 @@ class EndfieldService:
     async def get_weapon_catalog_view(self, weapon_type: str = "") -> WeaponCatalogView:
         raw = await self.client.fz_article_by_title("武器")
         return build_fz_weapon_catalog_view(raw, weapon_type)
+
+    async def fetch_medal_snapshot_fz(self, *, fetched_at: int | None = None) -> MedalSnapshotView:
+        """抓取 FZ 蚀刻章全量快照：roster（名称发现）→ 逐个详情（等级/镀层）。
+
+        并发由 ``fetch_json`` 内置信号量限流；roster 仅含名称，等级等信息在详情里，
+        故需对每枚奖章抓一次单件条目（首版约 140 次请求，结果落本地快照缓存）。
+        """
+        roster_raw = await self.client.fz_article_by_title("蚀刻章")
+        titles = [
+            _first_text(entry, "title")
+            for entry in _fz_overview_entries(roster_raw)
+            if _first_text(entry, "title")
+        ]
+        detail_results = await asyncio.gather(
+            *(self.client.fz_article_by_title(title) for title in titles),
+            return_exceptions=True,
+        )
+        detail_raws = [result for result in detail_results if isinstance(result, dict)]
+        return build_fz_medal_snapshot_view(
+            roster_raw,
+            detail_raws,
+            fetched_at=fetched_at or int(time.time()),
+        )
+
+    def build_medal_diff(
+        self,
+        current: MedalSnapshotView,
+        previous: MedalSnapshotView | None,
+    ) -> MedalDiffView:
+        """对比两份快照筛出新增奖章（id 集合差集）。
+
+        previous 为 None（首次快照）时无对比基线，new_medals 为空——
+        「新增」语义需要上一版本，首版只展示总数统计。
+        """
+        if previous is None:
+            return MedalDiffView(current=current, previous_version="", new_medals=[])
+        previous_ids = {medal.medal_id for medal in previous.medals if medal.medal_id}
+        new_medals = [
+            medal
+            for medal in current.medals
+            if medal.medal_id and medal.medal_id not in previous_ids
+        ]
+        return MedalDiffView(
+            current=current,
+            previous_version=previous.version,
+            new_medals=new_medals,
+        )
+
+    def build_medal_missing_view(
+        self,
+        raw_progress: dict[str, Any],
+        snapshot: MedalSnapshotView,
+        *,
+        nickname: str,
+        uid: str,
+        server_name: str,
+        limit: int = 30,
+    ) -> MedalMissingView:
+        """F2：SDK 玩家进度 × 全量快照，得出未获得 / 未升满 / 未镀层。"""
+        progress = _parse_player_medal_progress(raw_progress)
+        not_obtained: list[MedalItemView] = []
+        not_maxed: list[MedalItemView] = []
+        not_plated: list[MedalItemView] = []
+        for medal in snapshot.medals:
+            if not medal.medal_id:
+                continue
+            info = progress.get(medal.medal_id)
+            if info is None:
+                not_obtained.append(medal)
+                continue
+            if medal.can_be_upgraded and info.level < medal.max_level:
+                not_maxed.append(medal)
+            if medal.can_be_plated and not info.plated:
+                not_plated.append(medal)
+        owned_count = snapshot.total_count - len(not_obtained)
+        truncated = False
+        if len(not_obtained) + len(not_maxed) + len(not_plated) > limit:
+            truncated = True
+            per = max(1, limit // 3)
+            not_obtained = not_obtained[:per]
+            not_maxed = not_maxed[:per]
+            not_plated = not_plated[:per]
+        return MedalMissingView(
+            nickname=nickname,
+            uid=uid,
+            server_name=server_name,
+            snapshot_version=snapshot.version,
+            total_count=snapshot.total_count,
+            owned_count=owned_count,
+            not_obtained=not_obtained,
+            not_maxed=not_maxed,
+            not_plated=not_plated,
+            truncated=truncated,
+            shown_count=len(not_obtained) + len(not_maxed) + len(not_plated),
+        )
 
     async def find_weapon_operator_names(self, view: WeaponView) -> list[str]:
         try:
@@ -2208,6 +2309,157 @@ def _fz_template_attrs(raw: dict[str, Any]) -> dict[str, Any]:
         if isinstance(attrs, dict) and isinstance(attrs.get("hero"), dict):
             return attrs
     return {}
+
+
+# ----- 蚀刻章/奖章（FZ 单件模板「蚀刻章·单件档案」，数据在 attrs.entry） -----
+
+def _fz_medal_entry_attrs(raw: dict[str, Any]) -> dict[str, Any]:
+    """返回含 ``entry`` 的模板 attrs（区别于干员/装备的 ``hero``）。"""
+    content = ((raw.get("revision") or {}).get("contentJson") or {}).get("content") or []
+    for node in content:
+        if not isinstance(node, dict):
+            continue
+        attrs = node.get("attrs") or {}
+        if isinstance(attrs, dict) and isinstance(attrs.get("entry"), dict):
+            return attrs
+    return {}
+
+
+def _derive_medal_levels(entry: dict[str, Any]) -> tuple[int, bool]:
+    """从 ``entry.levels`` 推导 (max_level, can_be_upgraded)。
+
+    FZ 单件档案没有 maxLevel/canBeUpgraded 直字段，按 levels 数组推导：
+    最高等级 = levels 末项的 level（缺省回退 initLevel / len）；可升级 = levels 多于 1 级。
+    """
+    levels = _ordered_fz_levels(_unwrap_fz_list(entry.get("levels"), "levels", "items", "list"))
+    if levels:
+        max_level = _to_int(_first_value(levels[-1], "level", "lv")) or len(levels)
+        can_upgrade = len(levels) > 1
+    else:
+        max_level = _to_int(_first_value(entry, "initLevel", "level"))
+        can_upgrade = False
+    if max_level <= 0:
+        max_level = 1
+    return max_level, can_upgrade
+
+
+# ----- F2：玩家蚀刻章进度（森空岛 card/detail）归一化 -----
+
+def _parse_player_medal_progress(raw: dict[str, Any]) -> dict[str, MedalProgressView]:
+    """从森空岛 card/detail 响应提取奖章进度 {medal_id: MedalProgressView}。
+
+    路径 ``data.detail.achieve.achieveMedals[]``；每枚含 ``achievementData.id`` / ``level`` /
+    ``isPlated``。只有**已获得**的奖章会出现在列表中——不在列表即未获得（用于交叉比对）。
+    id 与 FZ/Warfarin 共享 achv_ 命名空间，可直接按 id 关联。
+    """
+    achieve = (((raw.get("data") or {}).get("detail") or {}).get("achieve") or {})
+    result: dict[str, MedalProgressView] = {}
+    for item in achieve.get("achieveMedals") or []:
+        if not isinstance(item, dict):
+            continue
+        meta = item.get("achievementData") or {}
+        medal_id = _first_text(meta, "id", "achievementId") or _first_text(item, "id")
+        if not medal_id:
+            continue
+        plated_raw = item.get("isPlated")
+        plated = plated_raw is True or (
+            isinstance(plated_raw, str) and plated_raw.strip().lower() in ("true", "1", "yes")
+        )
+        result[medal_id] = MedalProgressView(
+            medal_id=medal_id,
+            level=_to_int(item.get("level")),
+            plated=plated,
+        )
+    return result
+
+
+def build_fz_medal_item(
+    detail_raw: dict[str, Any],
+    roster_entry: dict[str, Any] | None = None,
+) -> MedalItemView | None:
+    """一条 FZ 蚀刻章详情（含 revision）→ MedalItemView；name 缺失返回 None。"""
+    attrs = _fz_medal_entry_attrs(detail_raw)
+    entry = attrs.get("entry") if isinstance(attrs.get("entry"), dict) else {}
+    roster_entry = roster_entry if isinstance(roster_entry, dict) else {}
+    name = _first_text(entry, "name") or _first_text(roster_entry, "name")
+    if not name:
+        return None
+    medal_id = _first_text(entry, "id", "medalId", "achvId") or _first_text(roster_entry, "title")
+    max_level, can_upgrade = _derive_medal_levels(entry)
+    raw_plate = _first_value(entry, "canBePlated")
+    can_be_plated = raw_plate is True or (
+        isinstance(raw_plate, str) and raw_plate.strip().lower() in ("true", "1", "yes")
+    )
+    return MedalItemView(
+        medal_id=medal_id,
+        name=name,
+        category_name=_first_text(entry, "categoryName") or _first_text(roster_entry, "categoryName"),
+        group_name=_first_text(entry, "groupName") or _first_text(roster_entry, "groupName"),
+        init_level=_to_int(_first_value(entry, "initLevel", "level")),
+        max_level=max_level,
+        can_be_upgraded=can_upgrade,
+        can_be_plated=can_be_plated,
+        order=_to_int(entry.get("order")),
+        icon_url=_fz_asset_raw_url(
+            _first_text(entry, "iconUrl", "icon") or _first_text(roster_entry, "icon")
+        ),
+        description=_clean_fz_rich_text(
+            _first_value(entry, "desc", "description") or _first_value(roster_entry, "desc")
+        ),
+    )
+
+
+def build_fz_medal_snapshot_view(
+    roster_raw: dict[str, Any],
+    detail_raws: list[dict[str, Any]],
+    *,
+    fetched_at: int = 0,
+    version_label: str | None = None,
+) -> MedalSnapshotView:
+    """聚合 FZ roster（名称发现）+ 各详情（等级/镀层）→ 全量奖章快照。"""
+    article = roster_raw.get("article") or {}
+    roster_by_title: dict[str, dict[str, Any]] = {}
+    for entry in _fz_overview_entries(roster_raw):
+        title = _first_text(entry, "title")
+        if title:
+            roster_by_title[title] = entry
+
+    medals: list[MedalItemView] = []
+    for detail in detail_raws:
+        if not isinstance(detail, dict):
+            continue
+        detail_article = detail.get("article") or {}
+        roster_entry = roster_by_title.get(_first_text(detail_article, "title"))
+        item = build_fz_medal_item(detail, roster_entry)
+        if item is not None:
+            medals.append(item)
+
+    medals.sort(key=lambda medal: (medal.category_name, medal.order, medal.name))
+
+    level_counts: dict[int, int] = {}
+    category_counts: dict[str, int] = {}
+    platable_count = 0
+    upgradable_count = 0
+    for medal in medals:
+        level_counts[medal.max_level] = level_counts.get(medal.max_level, 0) + 1
+        if medal.category_name:
+            category_counts[medal.category_name] = category_counts.get(medal.category_name, 0) + 1
+        if medal.can_be_plated:
+            platable_count += 1
+        if medal.can_be_upgraded:
+            upgradable_count += 1
+
+    return MedalSnapshotView(
+        medals=medals,
+        version=version_label or str(article.get("updatedAt") or "")[:10],
+        fetched_at=fetched_at,
+        source="fz",
+        total_count=len(medals),
+        level_counts=level_counts,
+        platable_count=platable_count,
+        upgradable_count=upgradable_count,
+        category_counts=category_counts,
+    )
 
 
 def _fz_species_info(attrs: dict[str, Any]) -> tuple[str, str]:

@@ -47,6 +47,10 @@ from .models import (
     WeaponCatalogItemView,
     WeaponCatalogView,
     WeaponView,
+    MedalDiffView,
+    MedalItemView,
+    MedalMissingView,
+    MedalSnapshotView,
 )
 from .gacha import (
     FreePullBatch,
@@ -789,6 +793,176 @@ async def _draw_neutral_card(selector: str, body: str, *, extra_css: str = "") -
         return await run_image_render(optimize_png_container, output)
     finally:
         schedule_temp_file_cleanup(html_path, delay_seconds=30)
+
+
+# ===== 蚀刻章/奖章（F1 版本对比）渲染 =====
+
+MEDAL_PAGE_BUDGETS: tuple[int, ...] = (56, 40, 28, 18)
+MEDAL_CARD_CSS = """
+.medal-headline{display:grid;grid-template-columns:1.3fr 1fr 1fr 1.4fr;gap:10px;margin-bottom:14px}
+.medal-headline .tile{padding:12px 14px;border:1px solid #999;background:#fff}
+.medal-headline .tile span{display:block;color:#666;font-size:13px}
+.medal-headline .tile strong{display:block;margin-top:4px;font-size:30px;line-height:1}
+.medal-headline .tile.primary{border:3px solid #222}
+.medal-headline .tile small{display:block;margin-top:5px;color:#888;font-size:11px;font-weight:800}
+.medal-section{margin-top:6px}.medal-section h2{margin:0 0 10px;font-size:22px}
+.medal-list{display:grid;gap:8px}
+.medal-item{display:grid;grid-template-columns:72px minmax(0,1fr);gap:12px;align-items:center;padding:10px;border:1px solid #888;background:#fff}
+.medal-icon{width:72px;height:72px;display:grid;place-items:center;overflow:hidden;border:1px solid #777;background:#eee}
+.medal-icon img{width:100%;height:100%;object-fit:contain}.medal-icon .no-icon{color:#999;font-size:11px}
+.medal-info strong{font-size:17px}
+.medal-meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px}
+.medal-meta .cat{color:#666;font-size:12px}
+.medal-meta .lv,.medal-meta .tag{padding:1px 7px;border:1px solid #444;font-size:11px;font-weight:800;line-height:1.6}
+.medal-meta .lv{background:#222;color:#fff}
+.medal-meta .tag.up{background:#eef;border-color:#446}.medal-meta .tag.plate{background:#fee;border-color:#944}
+.medal-desc{margin-top:5px;color:#555;font-size:12px;line-height:1.4}
+.medal-source{display:flex;justify-content:space-between;gap:16px;margin-top:14px;padding-top:10px;border-top:2px solid #222;color:#777;font-size:12px;font-weight:800}
+"""
+
+
+async def draw_medal_stats_card(view: MedalDiffView) -> tuple[bytes, ...]:
+    """F1：蚀刻章总数 + 相较上版本新增奖章详情；过高自动分页。"""
+    new_medals = view.new_medals
+    if not new_medals:
+        return (await _draw_medal_stats_page(view, [], 1, 1),)
+
+    try:
+        return (await _draw_medal_stats_page(view, new_medals, 1, 1),)
+    except RuntimeError as exc:
+        if not _is_gacha_height_limit_error(exc):
+            raise
+
+    last_error: RuntimeError | None = None
+    for budget in MEDAL_PAGE_BUDGETS:
+        chunks = [new_medals[i:i + budget] for i in range(0, len(new_medals), budget)]
+        pages: list[bytes] = []
+        try:
+            for index, chunk in enumerate(chunks):
+                pages.append(await _draw_medal_stats_page(view, chunk, index + 1, len(chunks)))
+        except RuntimeError as exc:
+            if not _is_gacha_height_limit_error(exc):
+                raise
+            last_error = exc
+            continue
+        logger.info(f"[endfield] medal stats paginated pages={len(pages)} budget={budget}")
+        return tuple(pages)
+    raise last_error or RuntimeError("蚀刻章统计分页失败")
+
+
+async def _draw_medal_stats_page(
+    view: MedalDiffView,
+    medals: list[MedalItemView],
+    page_number: int,
+    page_count: int,
+) -> bytes:
+    current = view.current
+    icon_map = await _image_data_urls([medal.icon_url for medal in medals if medal.icon_url])
+    level_line = " · ".join(
+        f"Lv{level}:{count}" for level, count in sorted(current.level_counts.items())
+    )
+    new_total = len(view.new_medals)
+    headline_state = ("首次快照" if not view.previous_version else f"相较 {view.previous_version}")
+    headline_state += f" · 新增 {new_total}"
+    if page_count > 1:
+        headline_state += f" · 第 {page_number}/{page_count} 页"
+
+    headline = (
+        '<section class="medal-headline">'
+        f'<div class="tile primary"><span>蚀刻章总数</span><strong>{current.total_count}</strong>'
+        f'<small>{esc(level_line) or "暂无等级分布"}</small></div>'
+        f'<div class="tile"><span>可镀层</span><strong>{current.platable_count}</strong></div>'
+        f'<div class="tile"><span>可升级</span><strong>{current.upgradable_count}</strong></div>'
+        f'<div class="tile"><span>本版本新增</span><strong>{new_total}</strong><small>{esc(headline_state)}</small></div>'
+        '</section>'
+    )
+    medal_html = (
+        "".join(_medal_item_html(medal, icon_map) for medal in medals)
+        if medals
+        else '<div class="empty">暂无新增蚀刻章（首次快照或本版本无新增）</div>'
+    )
+    body = f"""
+    <header><div><small>ENDFIELD / MEDAL ARCHIVE</small><h1>蚀刻章统计</h1><p>{esc(headline_state)}</p></div></header>
+    <main>
+      {headline}
+      <section class="medal-section">
+        <h2>新增蚀刻章（本页 {len(medals)}）</h2>
+        <div class="medal-list">{medal_html}</div>
+      </section>
+      <footer class="medal-source"><span>数据来源 FZ Wiki（跟进官方客户端修正）</span><span>版本 {esc(current.version)} · 共 {current.total_count} 枚</span></footer>
+    </main>
+    """
+    return await _draw_neutral_card("medal-stats-card", body, extra_css=MEDAL_CARD_CSS)
+
+
+def _medal_item_html(medal: MedalItemView, icon_map: dict[str, str]) -> str:
+    data_url = icon_map.get(medal.icon_url, "")
+    if data_url:
+        icon = f'<div class="medal-icon"><img src="{esc_attr(data_url)}" alt=""></div>'
+    else:
+        icon = '<div class="medal-icon"><span class="no-icon">无图</span></div>'
+    meta_parts = []
+    if medal.category_name:
+        meta_parts.append(f'<span class="cat">{esc(medal.category_name)}</span>')
+    if medal.max_level > 1:
+        meta_parts.append(f'<span class="lv">Lv{medal.max_level}</span>')
+    if medal.can_be_upgraded:
+        meta_parts.append('<span class="tag up">可升级</span>')
+    if medal.can_be_plated:
+        meta_parts.append('<span class="tag plate">可镀层</span>')
+    meta = f'<div class="medal-meta">{"".join(meta_parts)}</div>' if meta_parts else ""
+    desc = f'<div class="medal-desc">{esc(medal.description)}</div>' if medal.description else ""
+    return (
+        f'<div class="medal-item">{icon}'
+        f'<div class="medal-info"><strong>{esc(medal.name)}</strong>{meta}{desc}</div>'
+        '</div>'
+    )
+
+
+async def draw_medal_missing_card(view: MedalMissingView) -> tuple[bytes, ...]:
+    """F2：个人缺章（未获得/未升满/未镀层）；截断后条目数有限，单页足够。"""
+    all_medals = [*view.not_obtained, *view.not_maxed, *view.not_plated]
+    icon_map = await _image_data_urls([m.icon_url for m in all_medals if m.icon_url])
+    sections: list[str] = []
+    if view.not_obtained:
+        sections.append(_medal_section_html("未获得", view.not_obtained, icon_map))
+    if view.not_maxed:
+        sections.append(_medal_section_html("未升满", view.not_maxed, icon_map))
+    if view.not_plated:
+        sections.append(_medal_section_html("未镀层", view.not_plated, icon_map))
+    if not sections:
+        sections.append('<div class="empty">统计口径内未发现缺漏，蚀刻章已全部集齐。</div>')
+    notice = (
+        '<div class="medal-notice">缺章过多，仅展示部分，完整清单请在游戏内查看。</div>'
+        if view.truncated else ""
+    )
+    body = f"""
+    <header><div><small>ENDFIELD / MEDAL MISSING</small><h1>蚀刻章缺章</h1><p>{esc(view.nickname)} · {esc(view.server_name)} · {esc(view.uid)}</p></div></header>
+    <main>
+      <section class="medal-headline">
+        <div class="tile primary"><span>总数</span><strong>{view.total_count}</strong></div>
+        <div class="tile"><span>已获得</span><strong>{view.owned_count}</strong></div>
+        <div class="tile"><span>未获得</span><strong>{len(view.not_obtained)}</strong></div>
+        <div class="tile"><span>未升满</span><strong>{len(view.not_maxed)}</strong></div>
+      </section>
+      {notice}
+      {''.join(sections)}
+      <footer class="medal-source"><span>进度：森空岛 SDK · 元数据：FZ Wiki</span><span>快照版本 {esc(view.snapshot_version)} · 已展示 {view.shown_count}</span></footer>
+    </main>
+    """
+    extra = MEDAL_CARD_CSS + (
+        ".medal-notice{margin:6px 0 12px;padding:10px 14px;border:2px dashed #944;"
+        "background:#fee;color:#944;font-size:13px;font-weight:800}"
+    )
+    return (await _draw_neutral_card("medal-missing-card", body, extra_css=extra),)
+
+
+def _medal_section_html(title: str, medals: list[MedalItemView], icon_map: dict[str, str]) -> str:
+    items = "".join(_medal_item_html(medal, icon_map) for medal in medals)
+    return (
+        f'<section class="medal-section"><h2>{esc(title)}（{len(medals)}）</h2>'
+        f'<div class="medal-list">{items}</div></section>'
+    )
 
 
 async def draw_equipment_catalog_card(view: EquipmentCatalogView) -> bytes:

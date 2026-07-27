@@ -348,7 +348,8 @@ async def _handle_personal_command(matcher, event: Event, command: ParsedEndfiel
 
 async def _handle_binding(matcher, qq_user_id: str, cipher: CredentialCipher) -> None:
     method = await _prompt_text(
-        "请选择绑定方式：\n1. Token 绑定\n2. 手机号验证码绑定\n回复 1 或 2；回复“取消”退出。",
+        "请选择绑定方式：\n1. Token 绑定\n2. 手机号验证码绑定\n"
+        "可重复绑定其他鹰角账号，已有账号不会被覆盖。\n回复 1 或 2；回复“取消”退出。",
         timeout=90,
     )
     if method is None:
@@ -384,9 +385,19 @@ async def _handle_binding(matcher, qq_user_id: str, cipher: CredentialCipher) ->
     selected = await _select_binding_roles(roles)
     if selected is None:
         return await matcher.finish("绑定已取消或等待超时。")
-    account_store.bind_roles(qq_user_id, account_token, selected, cipher)
+    previous_roles = account_store.list_roles(qq_user_id)
+    previous_keys = {(role.role_id, role.server_id) for role in previous_roles}
+    bound_roles = account_store.bind_roles(qq_user_id, account_token, selected, cipher)
+    added_count = sum(
+        (role.role_id, role.server_id) not in previous_keys for role in selected
+    )
+    updated_count = len(selected) - added_count
+    summary = f"绑定完成：新增 {added_count} 个账号"
+    if updated_count:
+        summary += f"，更新 {updated_count} 个账号"
+    summary += f"；当前共绑定 {len(bound_roles)} 个账号。"
     return await matcher.finish(
-        "绑定完成。\n" + "\n".join(
+        summary + "\n" + "\n".join(
             f"- {role.nickname} · {role.server_name or role.server_id} · UID {role.role_id}" for role in selected
         )
     )
@@ -581,7 +592,7 @@ def _format_accounts(roles: list[EndfieldRole], *, reveal_uid: bool) -> str:
         marker = " [主账号]" if role.is_primary else ""
         uid = role.role_id if reveal_uid else role.masked_uid
         lines.append(f"{index}. {role.nickname}{marker} · {role.server_name or role.server_id} · UID {uid}")
-    lines.append("可使用 /zmd 主账号 <编号> 或 /zmd 解绑 <编号> 管理。")
+    lines.append("可使用 /zmd 添加账号 继续绑定，或用 /zmd 主账号 <编号>、/zmd 解绑 <编号> 管理。")
     return "\n".join(lines)
 
 

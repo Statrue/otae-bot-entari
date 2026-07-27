@@ -594,6 +594,7 @@ class EndfieldCommandParserTests(unittest.TestCase):
 
         with Image.open(image_path) as image:
             self.assertEqual((image.size, image.mode), ((1075, 761), "RGBA"))
+        self.assertIn("/zmd 绑定 / 添加账号  可重复追加多个账号", spec)
         self.assertIn("/zmd 抽卡同步 [账号] [--full]", spec)
         self.assertIn("/zmd 抽卡记录 [账号] [页码] [--池 名称]", spec)
         self.assertIn("/zmd 抽卡导入 [账号]（仅私聊）", spec)

@@ -23,7 +23,7 @@ SOURCE_ALIASES = {"数据源", "source", "sources"}
 DEV_ALIASES = {"dev"}
 ALIAS_COMMAND_ALIASES = {"别名", "alias"}
 ALIAS_ADD_ALIASES = {"添加", "新增", "add"}
-BIND_ALIASES = {"绑定", "bind"}
+BIND_ALIASES = {"绑定", "添加账号", "新增账号", "bind", "add-account", "addaccount"}
 ACCOUNT_ALIASES = {"账号", "账户", "account", "accounts"}
 PRIMARY_ALIASES = {"主账号", "主账户", "primary"}
 UNBIND_ALIASES = {"解绑", "unbind"}
@@ -387,7 +387,7 @@ def format_help() -> str:
     return "\n".join(
         [
             "终末地查询用法：",
-            "  /zmd 绑定（仅私聊，支持 Token 或短信验证码）",
+            "  /zmd 绑定 | /zmd 添加账号（仅私聊，可重复追加多个账号）",
             "  /zmd 账号 | /zmd 主账号 <编号> | /zmd 解绑 <编号>（仅私聊）",
             "  /zmd 签到 [全部|编号|昵称|UID后四位]",
             "  /zmd 抽卡 [账号] | /zmd 抽卡同步 [账号] [--full]",

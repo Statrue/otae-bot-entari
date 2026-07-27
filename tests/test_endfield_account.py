@@ -55,6 +55,8 @@ draw_module = _load(f"{PACKAGE}.draw", "plugins/endfield/draw.py")
 class EndfieldPersonalCommandTests(unittest.TestCase):
     def test_parses_account_and_attendance_commands(self):
         self.assertEqual(commands_module.parse_command("绑定").action, "bind")
+        self.assertEqual(commands_module.parse_command("添加账号").action, "bind")
+        self.assertEqual(commands_module.parse_command("add-account").action, "bind")
         self.assertEqual(commands_module.parse_command("账号").action, "accounts")
         primary = commands_module.parse_command("主账号 2")
         self.assertEqual((primary.action, primary.account_selector), ("primary", "2"))
@@ -77,6 +79,11 @@ class EndfieldPersonalCommandTests(unittest.TestCase):
     def test_rejects_invalid_page_and_missing_pool(self):
         self.assertTrue(commands_module.parse_command("抽卡记录 主账号 0").error)
         self.assertTrue(commands_module.parse_command("抽卡记录 --池").error)
+
+    def test_help_documents_multiple_account_binding(self):
+        help_text = commands_module.format_help()
+        self.assertIn("/zmd 添加账号", help_text)
+        self.assertIn("可重复追加多个账号", help_text)
 
 
 class EndfieldCredentialAndStoreTests(unittest.TestCase):
@@ -116,6 +123,29 @@ class EndfieldCredentialAndStoreTests(unittest.TestCase):
         removed = self.store.unbind("qq", "2")
         self.assertEqual(removed.nickname, "乙")
         self.assertTrue(self.store.list_roles("qq")[0].is_primary)
+
+    def test_one_user_can_bind_multiple_login_accounts(self):
+        first = self.store.bind_roles(
+            "qq", "token-a", [store_module.RoleCandidate("bind-a", "10001234", "1", "甲")], self.cipher
+        )[0]
+        roles = self.store.bind_roles(
+            "qq", "token-b", [store_module.RoleCandidate("bind-b", "20005678", "2", "乙")], self.cipher
+        )
+
+        self.assertEqual([role.nickname for role in roles], ["甲", "乙"])
+        self.assertNotEqual(roles[0].credential_id, roles[1].credential_id)
+        self.assertEqual(self.store.decrypt_token(roles[0], self.cipher), "token-a")
+        self.assertEqual(self.store.decrypt_token(roles[1], self.cipher), "token-b")
+        self.assertEqual(sum(role.is_primary for role in roles), 1)
+        self.assertEqual(self.store.resolve_role("qq").id, first.id)
+
+        self.store.unbind("qq", "1")
+        remaining = self.store.list_roles("qq")
+        self.assertEqual(len(remaining), 1)
+        self.assertTrue(remaining[0].is_primary)
+        self.assertEqual(self.store.decrypt_token(remaining[0], self.cipher), "token-b")
+        credential_count = self.store.conn.execute("SELECT COUNT(*) FROM credentials").fetchone()[0]
+        self.assertEqual(credential_count, 1)
 
     def test_gacha_deduplicates_and_filters_history(self):
         role = self.store.bind_roles(

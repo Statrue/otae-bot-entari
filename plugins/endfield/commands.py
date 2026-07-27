@@ -339,6 +339,7 @@ def score_candidate(query: str, *values: str) -> int:
     if not normalized_query:
         return 0
     query_keys = _search_keys(query)
+    query_pinyin = _pinyin_syllables(query) if not normalized_query.isascii() else ()
     best = 0
     for value in values:
         normalized_value = _normalize(value)
@@ -346,11 +347,15 @@ def score_candidate(query: str, *values: str) -> int:
             continue
         best = max(best, _score_normalized_pair(normalized_query, normalized_value))
         value_keys = _search_keys(value)
-        pinyin_score = _score_search_key_pair(query_keys[0], value_keys[0])
-        if normalized_query.isascii() or pinyin_score >= 82:
+        if normalized_query.isascii():
+            pinyin_score = _score_ascii_pinyin_pair(query_keys[0], _pinyin_syllables(value))
             best = max(best, min(pinyin_score, 88))
-        if normalized_query.isascii() and query_keys[1] == value_keys[1] and len(query_keys[1]) >= 2:
-            best = max(best, 88)
+            if query_keys[1] == value_keys[1] and len(query_keys[1]) >= 2:
+                best = max(best, 88)
+        else:
+            pinyin_score = _score_pinyin_syllable_pair(query_pinyin, _pinyin_syllables(value))
+            if pinyin_score >= 82:
+                best = max(best, min(pinyin_score, 88))
     return best
 
 
@@ -778,6 +783,45 @@ def _search_keys(text: str) -> tuple[str, str]:
     return full_pinyin, initials
 
 
+def _pinyin_syllables(text: str) -> tuple[str, ...]:
+    return tuple(
+        normalized
+        for part in lazy_pinyin(str(text or ""), errors="default")
+        if (normalized := _normalize(part))
+    )
+
+
+def _score_pinyin_syllable_pair(query: tuple[str, ...], value: tuple[str, ...]) -> int:
+    if len(query) < 2 or len(query) > len(value):
+        return 0
+    if query == value:
+        return 100
+    for index in range(len(value) - len(query) + 1):
+        if value[index : index + len(query)] == query:
+            return 92 if index == 0 else 82
+    return 0
+
+
+def _score_ascii_pinyin_pair(query: str, value: tuple[str, ...]) -> int:
+    if len(query) < 2 or not value:
+        return 0
+    joined_value = "".join(value)
+    boundaries = {0}
+    offset = 0
+    for syllable in value:
+        offset += len(syllable)
+        boundaries.add(offset)
+    if query == joined_value:
+        return 100
+    start = joined_value.find(query)
+    while start >= 0:
+        end = start + len(query)
+        if start in boundaries and end in boundaries:
+            return 92 if start == 0 else 82
+        start = joined_value.find(query, start + 1)
+    return 0
+
+
 def _score_normalized_pair(query: str, value: str) -> int:
     if not query or not value:
         return 0
@@ -807,15 +851,3 @@ def _score_normalized_pair(query: str, value: str) -> int:
     elif ratio >= 0.66:
         best = max(best, 65)
     return best
-
-
-def _score_search_key_pair(query: str, value: str) -> int:
-    if query.isascii() and value.isascii():
-        shorter_length = min(len(query), len(value))
-        if shorter_length < 2:
-            return 0
-        score = _score_normalized_pair(query, value)
-        if shorter_length < 3 and score in {72, 82}:
-            return 0
-        return score
-    return _score_normalized_pair(query, value)

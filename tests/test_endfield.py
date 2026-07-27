@@ -195,6 +195,22 @@ class EndfieldCommandParserTests(unittest.TestCase):
             commands.CANDIDATE_SCORE_THRESHOLD,
         )
         self.assertLess(
+            commands.score_candidate("惠", "清波水罐"),
+            commands.CANDIDATE_SCORE_THRESHOLD,
+        )
+        self.assertLess(
+            commands.score_candidate("hui", "清波水罐"),
+            commands.CANDIDATE_SCORE_THRESHOLD,
+        )
+        self.assertLess(
+            commands.score_entity_candidate("operator", "蛤蟆", "汤汤"),
+            commands.CANDIDATE_SCORE_THRESHOLD,
+        )
+        self.assertLess(
+            commands.score_entity_candidate("operator", "hama", "汤汤"),
+            commands.CANDIDATE_SCORE_THRESHOLD,
+        )
+        self.assertLess(
             commands.score_candidate("供养栓", "轻超域护手", "轻域手"),
             commands.CANDIDATE_SCORE_THRESHOLD,
         )

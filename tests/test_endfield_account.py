@@ -375,6 +375,41 @@ class XiaoheiheClientTests(unittest.TestCase):
 
         self.assertEqual([item.item_name for item in imported.six_stars], ["实际产出"])
 
+    def test_discovers_paid_history_outside_six_star_named_paths(self):
+        imported = xhh_module.parse_xhh_overview(
+            {
+                "status": "ok",
+                "result": {
+                    "is_bind": True,
+                    "user_info": {"uid": "10001234"},
+                    "gacha_record": [
+                        {
+                            "pool_id": "early",
+                            "pool_name": "早期池",
+                            "total_count": 81,
+                            "history": {
+                                "free_ten": [
+                                    {"name": "免费六星", "rarity": 5, "diff": 1}
+                                ]
+                            },
+                            "legacy_paid_records": [
+                                {"name": "付费六星一", "rarity": 5, "diff": 40},
+                                {"name": "付费六星二", "rarity": 5, "diff": 40},
+                            ],
+                            "up_items": [
+                                {"name": "卡池展示六星", "rarity": 6, "date": "2026-01-01"}
+                            ],
+                        }
+                    ],
+                },
+            }
+        )
+
+        self.assertEqual(
+            [(item.item_name, item.is_free) for item in imported.six_stars],
+            [("免费六星", True), ("付费六星一", False), ("付费六星二", False)],
+        )
+
     def test_rejects_unbound_or_uidless_overview(self):
         with self.assertRaisesRegex(xhh_module.XhhAPIError, "未绑定"):
             xhh_module.parse_xhh_overview({"status": "ok", "result": {"is_bind": False}})

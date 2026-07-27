@@ -321,9 +321,6 @@ def _parse_six_stars(
     for item in _walk_dicts(raw_value):
         if not _first(item, "name", "item_name", "char_name", "weapon_name"):
             continue
-        rarity = _first_int(item, "rarity", "star", "star_level", "rank")
-        if rarity and rarity < 6:
-            continue
         raw_items.append(item)
     provisional: list[tuple[int, dict[str, Any], int, int]] = []
     for index, item in enumerate(raw_items):
@@ -384,8 +381,6 @@ def _discover_six_star_records(raw_pool: dict[str, Any]) -> list[dict[str, Any]]
         if not _first(item, "name", "item_name", "char_name", "weapon_name"):
             continue
         rarity = _first_int(item, "rarity", "star", "star_level", "rank")
-        if rarity and rarity < 6:
-            continue
         if rarity >= 6 or any(key in item for key in signal_keys):
             copied = dict(item)
             if any(marker in path_identity for marker in ("free", "gift", "gratis", "免费", "赠送")):

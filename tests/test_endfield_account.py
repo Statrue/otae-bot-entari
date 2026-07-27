@@ -328,6 +328,29 @@ class XiaoheiheClientTests(unittest.TestCase):
         self.assertEqual(len(imported.six_stars), 1)
         self.assertTrue(imported.six_stars[0].is_free)
 
+    def test_keeps_legacy_six_star_records_with_rarity_five_for_metadata_validation(self):
+        imported = xhh_module.parse_xhh_overview(
+            {
+                "status": "ok",
+                "result": {
+                    "is_bind": True,
+                    "user_info": {"uid": "10001234"},
+                    "gacha_record": [
+                        {
+                            "pool_id": "early",
+                            "pool_name": "early",
+                            "total_count": 40,
+                            "six_star_record": [
+                                {"name": "legacy-six", "rarity": 5, "diff": 20}
+                            ],
+                        }
+                    ],
+                },
+            }
+        )
+
+        self.assertEqual([item.item_name for item in imported.six_stars], ["legacy-six"])
+
     def test_explicit_six_star_history_ignores_unrelated_nested_items(self):
         imported = xhh_module.parse_xhh_overview(
             {

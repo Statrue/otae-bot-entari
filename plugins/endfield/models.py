@@ -436,3 +436,5 @@ class MedalMissingView:
     not_plated: list[MedalItemView] = field(default_factory=list)
     truncated: bool = False
     shown_count: int = 0
+    level_counts: dict[int, int] = field(default_factory=dict)
+    suspect_names: set[str] = field(default_factory=set)

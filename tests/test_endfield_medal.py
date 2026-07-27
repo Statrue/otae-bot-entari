@@ -124,10 +124,12 @@ class MedalMissingTest(unittest.TestCase):
             MedalItemView(medal_id="c", name="C", max_level=1, can_be_plated=True),    # 未镀层
             MedalItemView(medal_id="d", name="D"),                                     # 未获得
         ])
+        # 森空岛 id 是 hex、FZ 是 achv_，命名空间不同 → 按 name 关联。
+        # 这里 achievementData.id 故意与 medal.medal_id 不同，验证确实按 name 而非 id 关联。
         raw_progress = {"data": {"detail": {"achieve": {"achieveMedals": [
-            {"achievementData": {"id": "a"}, "level": 1, "isPlated": True},
-            {"achievementData": {"id": "b"}, "level": 1, "isPlated": False},
-            {"achievementData": {"id": "c"}, "level": 1, "isPlated": False},
+            {"achievementData": {"id": "hex_a", "name": "A"}, "level": 1, "isPlated": True},
+            {"achievementData": {"id": "hex_b", "name": "B"}, "level": 1, "isPlated": False},
+            {"achievementData": {"id": "hex_c", "name": "C"}, "level": 1, "isPlated": False},
         ]}}}}
         view = service.build_medal_missing_view(
             raw_progress, snapshot, nickname="测试", uid="***1234", server_name="测试服"

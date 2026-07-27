@@ -441,9 +441,9 @@ class EndfieldService:
         not_maxed: list[MedalItemView] = []
         not_plated: list[MedalItemView] = []
         for medal in snapshot.medals:
-            if not medal.medal_id:
+            if not medal.name:
                 continue
-            info = progress.get(medal.medal_id)
+            info = progress.get(_norm_medal_name(medal.name))
             if info is None:
                 not_obtained.append(medal)
                 continue
@@ -452,6 +452,13 @@ class EndfieldService:
             if medal.can_be_plated and not info.plated:
                 not_plated.append(medal)
         owned_count = snapshot.total_count - len(not_obtained)
+        # 启发式：未获得的章若系列名（去等级后缀）出现在玩家进度里，标为「可能已拥有」
+        # （森空岛命名滞后，如·Ⅴ 被标成·Ⅳ）。仅提示，不改变已获得/未获得判定。
+        progress_bases = {_base_name(key) for key in progress}
+        suspect_names = {
+            medal.name for medal in not_obtained
+            if _base_name(medal.name) in progress_bases
+        }
         truncated = False
         if len(not_obtained) + len(not_maxed) + len(not_plated) > limit:
             truncated = True
@@ -471,6 +478,8 @@ class EndfieldService:
             not_plated=not_plated,
             truncated=truncated,
             shown_count=len(not_obtained) + len(not_maxed) + len(not_plated),
+            level_counts=dict(snapshot.level_counts),
+            suspect_names=suspect_names,
         )
 
     async def find_weapon_operator_names(self, view: WeaponView) -> list[str]:
@@ -2345,12 +2354,44 @@ def _derive_medal_levels(entry: dict[str, Any]) -> tuple[int, bool]:
 
 # ----- F2：玩家蚀刻章进度（森空岛 card/detail）归一化 -----
 
-def _parse_player_medal_progress(raw: dict[str, Any]) -> dict[str, MedalProgressView]:
-    """从森空岛 card/detail 响应提取奖章进度 {medal_id: MedalProgressView}。
+def _norm_medal_name(name: str) -> str:
+    """规范化奖章名用于跨源关联：去全部空白 + 去首尾中英文引号。
 
-    路径 ``data.detail.achieve.achieveMedals[]``；每枚含 ``achievementData.id`` / ``level`` /
-    ``isPlated``。只有**已获得**的奖章会出现在列表中——不在列表即未获得（用于交叉比对）。
-    id 与 FZ/Warfarin 共享 achv_ 命名空间，可直接按 id 关联。
+    FZ 用 ``achv_`` 语义 id、森空岛用 hex 哈希 id，命名空间不同（2026-07-27 实测），
+    无法按 id 关联；两源 name 均为中文奖章名，按规范化 name 关联（实测 135/140 命中）。
+    """
+    return (
+        "".join(str(name).split())
+        .strip('"')
+        .strip("'")
+        .strip("“”‘’")
+    )
+
+
+_ROMAN_SUFFIX = re.compile(r"[·.・]?\s*[0-9ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫlcdivxLCDIVX]+$")
+
+
+def _base_name(name: str) -> str:
+    """剥离末尾的罗马数字/数字等级后缀，得到奖章「系列名」。
+
+    用于检测森空岛命名滞后（如「武陵调度专家奖章·Ⅴ」被森空岛标成「·Ⅳ」）：
+    未获得的章若系列名出现在玩家进度里，标为「可能已拥有」。
+    启发式，仅作提示，不改变已获得/未获得判定。
+    """
+    normalized = _norm_medal_name(name)
+    stripped = _ROMAN_SUFFIX.sub("", normalized)
+    return stripped if stripped else normalized
+
+
+def _parse_player_medal_progress(raw: dict[str, Any]) -> dict[str, MedalProgressView]:
+    """从森空岛 card/detail 响应提取奖章进度，按规范化 name 索引。
+
+    路径 ``data.detail.achieve.achieveMedals[]``；每枚含 ``achievementData.name`` /
+    ``level`` / ``isPlated``。只有**已获得**的奖章会出现在列表中——不在列表即未获得。
+
+    注：森空岛 ``achievementData.id`` 是 hex 哈希，与 FZ 的 ``achv_`` id 分属不同命名空间，
+    不能按 id 关联，故用 name（规范化后）作为交叉比对键。MedalProgressView.medal_id
+    仅保留森空岛 hex id 备查。
     """
     achieve = (((raw.get("data") or {}).get("detail") or {}).get("achieve") or {})
     result: dict[str, MedalProgressView] = {}
@@ -2358,15 +2399,15 @@ def _parse_player_medal_progress(raw: dict[str, Any]) -> dict[str, MedalProgress
         if not isinstance(item, dict):
             continue
         meta = item.get("achievementData") or {}
-        medal_id = _first_text(meta, "id", "achievementId") or _first_text(item, "id")
-        if not medal_id:
+        name = _first_text(meta, "name")
+        if not name:
             continue
         plated_raw = item.get("isPlated")
         plated = plated_raw is True or (
             isinstance(plated_raw, str) and plated_raw.strip().lower() in ("true", "1", "yes")
         )
-        result[medal_id] = MedalProgressView(
-            medal_id=medal_id,
+        result[_norm_medal_name(name)] = MedalProgressView(
+            medal_id=_first_text(meta, "id", "achievementId"),
             level=_to_int(item.get("level")),
             plated=plated,
         )

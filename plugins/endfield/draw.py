@@ -818,6 +818,8 @@ MEDAL_CARD_CSS = """
 .medal-meta .tag.up{background:#eef;border-color:#446}.medal-meta .tag.plate{background:#fee;border-color:#944}
 .medal-desc{margin-top:5px;color:#555;font-size:12px;line-height:1.4}
 .medal-source{display:flex;justify-content:space-between;gap:16px;margin-top:14px;padding-top:10px;border-top:2px solid #222;color:#777;font-size:12px;font-weight:800}
+.medal-levelbar{display:flex;gap:8px;margin-bottom:14px}.medal-levelbar .lv-cell{flex:1;padding:10px 12px;border:1px solid #999;background:#fff;text-align:center}.medal-levelbar .lv-cell span{display:block;color:#666;font-size:13px}.medal-levelbar .lv-cell strong{display:block;margin-top:3px;font-size:26px;line-height:1}
+.medal-item.suspect{border-left:6px solid #c89200;background:#fffdf3}.medal-suspect-flag{display:inline-block;margin-left:6px;padding:1px 7px;border:1px solid #c89200;background:#fff3cf;color:#9a6b00;font-size:11px;font-weight:800}
 """
 
 
@@ -870,7 +872,7 @@ async def _draw_medal_stats_page(
     headline = (
         '<section class="medal-headline">'
         f'<div class="tile primary"><span>蚀刻章总数</span><strong>{current.total_count}</strong>'
-        f'<small>{esc(level_line) or "暂无等级分布"}</small></div>'
+        f'<small>各等级分布见下方</small></div>'
         f'<div class="tile"><span>可镀层</span><strong>{current.platable_count}</strong></div>'
         f'<div class="tile"><span>可升级</span><strong>{current.upgradable_count}</strong></div>'
         f'<div class="tile"><span>本版本新增</span><strong>{new_total}</strong><small>{esc(headline_state)}</small></div>'
@@ -885,6 +887,7 @@ async def _draw_medal_stats_page(
     <header><div><small>ENDFIELD / MEDAL ARCHIVE</small><h1>蚀刻章统计</h1><p>{esc(headline_state)}</p></div></header>
     <main>
       {headline}
+      {_medal_level_bar(current.level_counts)}
       <section class="medal-section">
         <h2>新增蚀刻章（本页 {len(medals)}）</h2>
         <div class="medal-list">{medal_html}</div>
@@ -895,7 +898,7 @@ async def _draw_medal_stats_page(
     return await _draw_neutral_card("medal-stats-card", body, extra_css=MEDAL_CARD_CSS)
 
 
-def _medal_item_html(medal: MedalItemView, icon_map: dict[str, str]) -> str:
+def _medal_item_html(medal: MedalItemView, icon_map: dict[str, str], *, suspect: bool = False) -> str:
     data_url = icon_map.get(medal.icon_url, "")
     if data_url:
         icon = f'<div class="medal-icon"><img src="{esc_attr(data_url)}" alt=""></div>'
@@ -912,9 +915,11 @@ def _medal_item_html(medal: MedalItemView, icon_map: dict[str, str]) -> str:
         meta_parts.append('<span class="tag plate">可镀层</span>')
     meta = f'<div class="medal-meta">{"".join(meta_parts)}</div>' if meta_parts else ""
     desc = f'<div class="medal-desc">{esc(medal.description)}</div>' if medal.description else ""
+    flag = '<span class="medal-suspect-flag">⚠ 可能已拥有</span>' if suspect else ""
+    item_class = "medal-item suspect" if suspect else "medal-item"
     return (
-        f'<div class="medal-item">{icon}'
-        f'<div class="medal-info"><strong>{esc(medal.name)}</strong>{meta}{desc}</div>'
+        f'<div class="{item_class}">{icon}'
+        f'<div class="medal-info"><strong>{esc(medal.name)}</strong>{flag}{meta}{desc}</div>'
         '</div>'
     )
 
@@ -925,7 +930,9 @@ async def draw_medal_missing_card(view: MedalMissingView) -> tuple[bytes, ...]:
     icon_map = await _image_data_urls([m.icon_url for m in all_medals if m.icon_url])
     sections: list[str] = []
     if view.not_obtained:
-        sections.append(_medal_section_html("未获得", view.not_obtained, icon_map))
+        sections.append(_medal_section_html(
+            "未获得", view.not_obtained, icon_map, suspect_names=view.suspect_names
+        ))
     if view.not_maxed:
         sections.append(_medal_section_html("未升满", view.not_maxed, icon_map))
     if view.not_plated:
@@ -945,6 +952,7 @@ async def draw_medal_missing_card(view: MedalMissingView) -> tuple[bytes, ...]:
         <div class="tile"><span>未获得</span><strong>{len(view.not_obtained)}</strong></div>
         <div class="tile"><span>未升满</span><strong>{len(view.not_maxed)}</strong></div>
       </section>
+      {_medal_level_bar(view.level_counts)}
       {notice}
       {''.join(sections)}
       <footer class="medal-source"><span>进度：森空岛 SDK · 元数据：FZ Wiki</span><span>快照版本 {esc(view.snapshot_version)} · 已展示 {view.shown_count}</span></footer>
@@ -957,8 +965,28 @@ async def draw_medal_missing_card(view: MedalMissingView) -> tuple[bytes, ...]:
     return (await _draw_neutral_card("medal-missing-card", body, extra_css=extra),)
 
 
-def _medal_section_html(title: str, medals: list[MedalItemView], icon_map: dict[str, str]) -> str:
-    items = "".join(_medal_item_html(medal, icon_map) for medal in medals)
+def _medal_level_bar(level_counts: dict[int, int]) -> str:
+    if not level_counts:
+        return ""
+    cells = "".join(
+        f'<div class="lv-cell"><span>Lv{lv}</span><strong>{level_counts[lv]}</strong></div>'
+        for lv in sorted(level_counts, reverse=True)
+    )
+    return f'<section class="medal-levelbar">{cells}</section>'
+
+
+def _medal_section_html(
+    title: str,
+    medals: list[MedalItemView],
+    icon_map: dict[str, str],
+    *,
+    suspect_names: set[str] | None = None,
+) -> str:
+    suspect_names = suspect_names or set()
+    items = "".join(
+        _medal_item_html(medal, icon_map, suspect=medal.name in suspect_names)
+        for medal in medals
+    )
     return (
         f'<section class="medal-section"><h2>{esc(title)}（{len(medals)}）</h2>'
         f'<div class="medal-list">{items}</div></section>'

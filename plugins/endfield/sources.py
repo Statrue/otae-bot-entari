@@ -13,7 +13,8 @@ class EndfieldSource:
 
 
 DATA_SOURCES: tuple[EndfieldSource, ...] = (
-    EndfieldSource("fz", "FZ Wiki", 10, frozenset({"operator", "weapon", "equipment"})),
+    EndfieldSource("fz", "FZ Wiki", 10, frozenset({"operator", "weapon", "equipment", "stage"})),
+    EndfieldSource("akedata", "AkeData", 20, frozenset({"stage"})),
     EndfieldSource("warfarin", "Warfarin Wiki", 20, frozenset({"operator", "weapon"})),
 )
 
@@ -22,6 +23,10 @@ _SOURCE_ALIASES = {
     "fz": "fz",
     "fz-wiki": "fz",
     "fz_wiki": "fz",
+    "akedata": "akedata",
+    "ake-data": "akedata",
+    "ake_data": "akedata",
+    "ake": "akedata",
     "warfarin": "warfarin",
     "warfarin-wiki": "warfarin",
     "warfarin_wiki": "warfarin",

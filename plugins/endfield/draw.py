@@ -259,7 +259,7 @@ async def draw_gacha_analysis_cards(view: GachaAnalysis, *, uid: str) -> tuple[b
     try:
         return (await draw_gacha_analysis_card(view, uid=uid),)
     except RuntimeError as exc:
-        if not _is_gacha_height_limit_error(exc):
+        if not is_height_limit_error(exc):
             raise
 
     character_pools = _recent_gacha_pools(view, "角色")
@@ -286,7 +286,7 @@ async def draw_gacha_analysis_cards(view: GachaAnalysis, *, uid: str) -> tuple[b
                     show_summary=page_index == 0,
                 ))
         except RuntimeError as exc:
-            if not _is_gacha_height_limit_error(exc):
+            if not is_height_limit_error(exc):
                 raise
             last_error = exc
             continue
@@ -420,7 +420,8 @@ def _gacha_column_render_rows(pools: list[PoolAnalysis]) -> int:
     )
 
 
-def _is_gacha_height_limit_error(exc: RuntimeError) -> bool:
+def is_height_limit_error(exc: RuntimeError) -> bool:
+    """True when ``strict_max_height`` rejected the render, not some other browser failure."""
     message = str(exc)
     return "Screenshot element height" in message and "exceeds limit" in message
 

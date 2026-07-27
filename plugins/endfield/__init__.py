@@ -64,6 +64,9 @@ from .draw import (
     draw_gacha_analysis_cards,
     draw_gacha_history_card,
 )
+from .stage_draw import draw_stage_card, draw_stage_catalog_cards
+from .stage_service import EndfieldStageService, StageVariantNotFound
+from .stage_source import StageDataIncomplete
 from .gacha import (
     EndfieldGachaService,
     ROLE_TASKS,
@@ -91,6 +94,7 @@ from .sources import source_label, source_order
 
 client = WarfarinClient()
 service = EndfieldService(client)
+stage_service = EndfieldStageService(client)
 gacha_asset_cache = EndfieldGachaAssetCache(service)
 account_store = EndfieldStore()
 official_client = EndfieldOfficialClient()
@@ -99,23 +103,25 @@ ENDFIELD_HELP_IMAGE_PATH = (
 )
 CARD_CACHE_TTL_SECONDS = 600.0
 CARD_CACHE_MAX_BYTES = 48 * 1024 * 1024
-CARD_RENDER_VERSION = "endfield-card-v27"
-CardCacheKey = tuple[str, str, str, str]
-_CARD_CACHE: AsyncTTLCache[CardCacheKey, bytes] = AsyncTTLCache(
+CARD_RENDER_VERSION = "endfield-card-v36"
+CardCacheKey = tuple[str, str, str, str, str, str, str]
+_CARD_CACHE: AsyncTTLCache[CardCacheKey, tuple[bytes, ...]] = AsyncTTLCache(
     ttl_seconds=CARD_CACHE_TTL_SECONDS,
     max_bytes=CARD_CACHE_MAX_BYTES,
     max_entries=64,
-    sizeof=len,
+    # A card can render as several images, so bound the cache on total bytes, not page count.
+    sizeof=lambda pages: sum(len(page) for page in pages),
 )
 
 Resolver = Callable[..., Awaitable[list[EndfieldCandidate]]]
-Renderer = Callable[[str, str], Awaitable[bytes | None]]
+Renderer = Callable[[str, str], Awaitable[bytes | tuple[bytes, ...] | None]]
 
 
 CONTENT_RESOLVERS: dict[str, Resolver] = {
     "operator": lambda query: _resolve_candidates_from_sources("operator", query),
     "weapon": lambda query: _resolve_candidates_from_sources("weapon", query),
     "equipment": lambda query: _resolve_candidates_from_sources("equipment", query),
+    "stage": lambda query: _resolve_candidates_from_sources("stage", query),
 }
 
 CONTENT_RENDERERS: dict[str, Renderer] = {
@@ -126,6 +132,8 @@ CONTENT_RENDERERS: dict[str, Renderer] = {
     "equipment": lambda key, source: _render_equipment(key, source),
     "equipment_catalog": lambda key, source: _render_equipment_catalog(key, source),
     "equipment_attribute": lambda key, source: _render_equipment_attribute(key, source),
+    "stage": lambda key, source: _render_stage(key, source),
+    "stage_catalog": lambda key, source: _render_stage_catalog(key, source),
 }
 
 SOURCE_CANDIDATE_RESOLVERS: dict[str, dict[str, Resolver]] = {
@@ -139,6 +147,10 @@ SOURCE_CANDIDATE_RESOLVERS: dict[str, dict[str, Resolver]] = {
     },
     "equipment": {
         "fz": lambda query, rarity: _resolve_equipment_candidates_fz(query, rarity),
+    },
+    "stage": {
+        "fz": lambda query: _resolve_stage_candidates_fz(query),
+        "akedata": lambda query: _resolve_stage_candidates_akedata(query),
     },
 }
 
@@ -221,8 +233,18 @@ async def _handle_command(matcher, event: Event, command: ParsedEndfieldCommand)
         return await _handle_loadout(matcher, command)
     if command.action not in {"query", "search"}:
         return await matcher.finish(format_unknown())
+    if command.scope == "stage" and command.source == "warfarin":
+        return await matcher.finish("Warfarin Wiki 暂不支持关卡资料。")
     if not command.query:
         if command.action == "query" and command.scope in {"operator", "weapon", "equipment"}:
+            command = ParsedEndfieldCommand(
+                "query",
+                scope=command.scope,
+                query="__all__",
+                source=command.source,
+                rarity=command.rarity,
+            )
+        elif command.action == "query" and command.scope == "stage":
             command = ParsedEndfieldCommand(
                 "query",
                 scope=command.scope,
@@ -266,17 +288,17 @@ async def _handle_command(matcher, event: Event, command: ParsedEndfieldCommand)
             return await matcher.finish(format_not_found(command.scope, command.query))
 
         render_started = perf_counter()
-        png = await _render_candidate(selected, command.source)
+        pngs = await _render_candidate(selected, command.source)
         render_seconds = perf_counter() - render_started
-        if png is None:
+        if pngs is None:
             return await matcher.finish(format_not_found(selected.kind, command.query))
         logger.info(
             f"[endfield] perf action=query scope={command.scope} kind={selected.kind} "
             f"candidate={candidate_seconds:.3f}s render={render_seconds:.3f}s "
-            f"total_before_send={perf_counter() - started:.3f}s"
+            f"pages={len(pngs)} total_before_send={perf_counter() - started:.3f}s"
         )
         try:
-            return await _finish_png(matcher, png)
+            return await _finish_pngs(matcher, pngs)
         except _ExitException:
             raise
         except Exception as exc:
@@ -286,7 +308,11 @@ async def _handle_command(matcher, event: Event, command: ParsedEndfieldCommand)
         raise
     except WarfarinAPIError as exc:
         logger.warning(f"[endfield] data API failed for {command.scope} {command.query}: {exc}")
+        if command.scope == "stage":
+            return await matcher.finish("关卡数据源暂时不可用")
         return await matcher.finish("数据源暂时不可用")
+    except (StageVariantNotFound, StageDataIncomplete) as exc:
+        return await matcher.finish(str(exc))
     except Exception as exc:
         logger.exception(f"[endfield] card failed for {command.scope} {command.query}: {exc}")
         return await matcher.finish("图片生成失败")
@@ -749,6 +775,8 @@ async def _resolve_candidates_from_sources(
     requested_source: str = "",
     rarity: str = "",
 ) -> list[EndfieldCandidate]:
+    if kind == "stage" and not requested_source:
+        return await _resolve_stage_candidates(query)
     resolvers = SOURCE_CANDIDATE_RESOLVERS.get(kind, {})
     errors: list[WarfarinAPIError] = []
     sources = (requested_source,) if requested_source else source_order(kind)
@@ -770,6 +798,53 @@ async def _resolve_candidates_from_sources(
     if errors:
         raise errors[-1]
     return []
+
+
+async def _resolve_stage_candidates_fz(query: str) -> list[EndfieldCandidate]:
+    return await _resolve_stage_candidates(query, "fz")
+
+
+async def _resolve_stage_candidates_akedata(query: str) -> list[EndfieldCandidate]:
+    return await _resolve_stage_candidates(query, "akedata")
+
+
+async def _resolve_stage_candidates(query: str, source: str = "") -> list[EndfieldCandidate]:
+    query = query.strip()
+    if not query:
+        return []
+    if query == "__all__":
+        catalog = await stage_service.get_catalog_view(source)
+        return [
+            EndfieldCandidate(
+                kind="stage_catalog",
+                key="",
+                display_name="关卡资料目录",
+                score=100,
+                source=source,
+                reason="catalog",
+                mode="catalog",
+                revision=catalog.revision,
+            )
+        ]
+    candidates: list[EndfieldCandidate] = []
+    for match in await stage_service.discover_matches(query, source):
+        score = score_candidate(match.query_text, match.display_name, match.title)
+        if score < CANDIDATE_SCORE_THRESHOLD:
+            continue
+        candidates.append(
+            EndfieldCandidate(
+                kind="stage",
+                key=match.key,
+                display_name=match.display_name,
+                score=score,
+                source=match.source,
+                reason="stage-directory",
+                variant=match.selector,
+                mode=match.mode,
+                revision=match.revision,
+            )
+        )
+    return candidates
 
 
 async def _resolve_operator_candidates_fz(query: str) -> list[EndfieldCandidate]:
@@ -1158,28 +1233,56 @@ async def _resolve_equipment_candidates_fz(
     return candidates
 
 
-async def _render_candidate(candidate: EndfieldCandidate, requested_source: str = "") -> bytes | None:
+async def _render_candidate(
+    candidate: EndfieldCandidate, requested_source: str = ""
+) -> tuple[bytes, ...] | None:
     renderer = CONTENT_RENDERERS.get(candidate.kind)
     if renderer is None:
         return None
-    cache_source = requested_source or "auto"
-    cache_key = (CARD_RENDER_VERSION, candidate.kind, cache_source, candidate.key)
+    effective_source = requested_source or candidate.source
+    cache_source = effective_source or "auto"
+    cache_key = (
+        CARD_RENDER_VERSION,
+        candidate.kind,
+        cache_source,
+        candidate.key,
+        candidate.revision,
+        candidate.mode,
+        candidate.variant,
+    )
 
-    async def render() -> bytes:
-        output = await renderer(candidate.key, requested_source)
+    degraded = False
+
+    async def render() -> tuple[bytes, ...]:
+        nonlocal degraded
+        if candidate.kind == "stage":
+            output, degraded = await _render_stage(
+                candidate.key,
+                effective_source,
+                mode=candidate.mode or "detail",
+                selector=candidate.variant,
+            )
+        else:
+            output = await renderer(candidate.key, effective_source)
         if output is None:
             raise _CardNotFound
-        return output
+        # Renderers that never overflow still return a single image; normalize here so the
+        # cache and the send path only ever deal with pages.
+        return (output,) if isinstance(output, bytes) else tuple(output)
 
     try:
-        output, cache_hit = await _CARD_CACHE.get_or_create_with_status(cache_key, render)
+        pages, cache_hit = await _CARD_CACHE.get_or_create_with_status(cache_key, render)
     except _CardNotFound:
         return None
+    if degraded:
+        # A card missing data only because a fetch failed must not be served for the full TTL.
+        await _CARD_CACHE.clear(lambda key: key == cache_key)
     logger.info(
         f"[endfield] card-cache kind={candidate.kind} source={cache_source} "
-        f"hit={str(cache_hit).lower()} bytes={len(output)}"
+        f"hit={str(cache_hit).lower()} pages={len(pages)} "
+        f"bytes={sum(len(page) for page in pages)}"
     )
-    return output
+    return pages
 
 
 async def _render_operator(key: str, source: str = "") -> bytes | None:
@@ -1242,27 +1345,6 @@ async def _render_equipment(key: str, source: str = "") -> bytes | None:
     return output
 
 
-async def _render_equipment_attribute(key: str, source: str = "") -> bytes | None:
-    if source and source != "fz":
-        return None
-    filters, rarity_filter = _parse_equipment_attribute_key(key)
-    if not filters:
-        return None
-    started = perf_counter()
-    try:
-        view = await service.get_equipment_attribute_catalog_view(filters, rarity_filter)
-    except ValueError:
-        return None
-    data_seconds = perf_counter() - started
-    draw_started = perf_counter()
-    output = await draw_equipment_catalog_card(view)
-    logger.info(
-        f"[endfield] render kind=equipment_attribute items={view.total_count} "
-        f"data={data_seconds:.3f}s draw={perf_counter() - draw_started:.3f}s"
-    )
-    return output
-
-
 async def _render_operator_catalog(key: str, source: str = "") -> bytes | None:
     if source and source != "fz":
         return None
@@ -1292,6 +1374,61 @@ async def _render_equipment_catalog(key: str, source: str = "") -> bytes | None:
         f"draw={perf_counter() - draw_started:.3f}s"
     )
     return output
+
+
+async def _render_equipment_attribute(key: str, source: str = "") -> bytes | None:
+    if source and source != "fz":
+        return None
+    filters, rarity_filter = _parse_equipment_attribute_key(key)
+    if not filters:
+        return None
+    started = perf_counter()
+    try:
+        view = await service.get_equipment_attribute_catalog_view(filters, rarity_filter)
+    except ValueError:
+        return None
+    data_seconds = perf_counter() - started
+    draw_started = perf_counter()
+    output = await draw_equipment_catalog_card(view)
+    logger.info(
+        f"[endfield] render kind=equipment_attribute items={view.total_count} "
+        f"data={data_seconds:.3f}s draw={perf_counter() - draw_started:.3f}s"
+    )
+    return output
+
+
+async def _render_stage(
+    key: str,
+    source: str = "",
+    *,
+    mode: str = "detail",
+    selector: str = "",
+) -> tuple[bytes | None, bool]:
+    """Returns the card and whether it is missing data purely because a fetch failed."""
+    if source and source not in {"fz", "akedata"}:
+        return None, False
+    started = perf_counter()
+    view = await stage_service.get_stage_view(
+        key,
+        mode=mode,
+        selector=selector,
+        source=source or "fz",
+    )
+    data_seconds = perf_counter() - started
+    output = await draw_stage_card(view)
+    logger.info(
+        f"[endfield] render kind=stage mode={mode} data={data_seconds:.3f}s "
+        f"draw={perf_counter() - started - data_seconds:.3f}s "
+        f"unreachable={len(view.unreachable_enemies)}"
+    )
+    return output, bool(view.unreachable_enemies)
+
+
+async def _render_stage_catalog(key: str, source: str = "") -> tuple[bytes, ...] | None:
+    del key
+    if source and source not in {"fz", "akedata"}:
+        return None
+    return await draw_stage_catalog_cards(await stage_service.get_catalog_view(source))
 
 
 async def _finish_png(matcher, png: bytes) -> None:
@@ -1340,7 +1477,7 @@ async def _handle_dev_command(command: ParsedEndfieldCommand) -> str:
     if command.dev_action == "refresh":
         scope = _normalize_cache_scope(command.args[0] if command.args else "all")
         if scope is None or scope == "icon":
-            return "用法：/ef dev refresh <all|干员|武器|装备> [关键词]"
+            return "用法：/ef dev refresh <all|干员|武器|装备|关卡> [关键词]"
         query = " ".join(command.args[1:]).strip()
         removed = await _clear_endfield_caches(scope)
         if not query:
@@ -1361,7 +1498,7 @@ async def _handle_dev_command(command: ParsedEndfieldCommand) -> str:
         if action == "clear":
             scope = _normalize_cache_scope(command.args[1] if len(command.args) > 1 else "all")
             if scope is None:
-                return "用法：/ef dev cache clear <all|operator|weapon|equipment|icon>"
+                return "用法：/ef dev cache clear <all|operator|weapon|equipment|stage|icon>"
             removed = await _clear_endfield_caches(scope)
             return f"已清理 {scope} 缓存，共 {removed} 项。"
         return "\n".join(await _cache_status_lines())
@@ -1404,6 +1541,8 @@ def _normalize_cache_scope(value: str) -> str | None:
         return "weapon"
     if normalized in {"equipment", "equip", "eq", "装备"}:
         return "equipment"
+    if normalized in {"stage", "stages", "关卡", "副本"}:
+        return "stage"
     if normalized in {"icon", "icons", "图标", "素材"}:
         return "icon"
     return None
@@ -1416,7 +1555,7 @@ async def _clear_endfield_caches(scope: str) -> int:
         removed += await clear_http_cache("endfield-")
     elif scope == "icon":
         removed += await clear_http_cache("endfield-assets")
-    elif scope in {"operator", "weapon", "equipment"}:
+    elif scope in {"operator", "weapon", "equipment", "stage"}:
         cache_kinds = (
             {scope, "equipment_catalog", "equipment_attribute"} if scope == "equipment" else {scope}
         )

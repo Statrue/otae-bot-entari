@@ -15,6 +15,7 @@ ROOT_ALIASES = ("终末地", "endfield", "ef", "zmd")
 OPERATOR_ALIASES = {"干员", "角色", "operator", "op"}
 WEAPON_ALIASES = {"武器", "weapon", "wp"}
 EQUIPMENT_ALIASES = {"装备", "equipment", "equip", "eq"}
+STAGE_ALIASES = {"关卡", "副本", "stage", "dungeon"}
 LOADOUT_ALIASES = {"配装", "配装模拟器", "loadout", "build"}
 QUICK_CALC_ALIASES = {"速算", "quickcalc", "calc"}
 SEARCH_ALIASES = {"搜索", "search", "s"}
@@ -39,6 +40,8 @@ SCOPE_LABELS = {
     "equipment": "装备",
     "equipment_catalog": "装备套组",
     "equipment_attribute": "装备",
+    "stage": "关卡",
+    "stage_catalog": "关卡目录",
 }
 
 EQUIPMENT_ATTRIBUTE_NAMES = {
@@ -115,6 +118,9 @@ class EndfieldCandidate:
     score: int
     source: str = ""
     reason: str = ""
+    variant: str = ""
+    mode: str = ""
+    revision: str = ""
 
 
 @dataclass(frozen=True)
@@ -195,6 +201,10 @@ def parse_command(rest: str) -> ParsedEndfieldCommand:
     if head in EQUIPMENT_ALIASES:
         return ParsedEndfieldCommand(
             "query", scope="equipment", query=" ".join(parts[1:]).strip(), source=source, rarity=rarity
+        )
+    if head in STAGE_ALIASES:
+        return ParsedEndfieldCommand(
+            "query", scope="stage", query=" ".join(parts[1:]).strip(), source=source, rarity=rarity
         )
 
     return ParsedEndfieldCommand("query", scope="all", query=" ".join(parts).strip(), source=source, rarity=rarity)
@@ -401,13 +411,15 @@ def format_help() -> str:
             "  /ef 装备 <名称> | /ef eq <名称>",
             "  /ef 装备（查看全部套组）| /ef 装备 <套组名>",
             "  /zmd 装备 主力量 副敏捷（按主副属性筛选）",
+            "  /zmd 关卡 | /zmd 副本（查看关卡资料目录）",
+            "  /zmd 副本 <关卡名> [变体名|总览]",
             "  /ef 配装（交互输入干员、可选武器与装备）",
             "  /zmd 配装 佩丽卡 脉冲源石配件 脉冲甲 脉冲源石配件 超轻域手 角色潜能2 武器潜能3",
             "  /ef 搜索 <关键词> | /efs <关键词>",
-            "  /ef <关键词> --source <fz|warfarin>",
+            "  /ef <关键词> --source <fz|akedata|warfarin>",
             "  /ef 数据源",
             "",
-            "参数：-s/--source 可指定 FZ Wiki 或 Warfarin Wiki。",
+            "参数：-s/--source 可指定 FZ Wiki、AkeData 或 Warfarin Wiki。",
             "干员速查：/ef 干员；可按元素或职业筛选，例如 /ef 干员 灼热、/ef 干员 术师。",
             "武器速查：/ef 武器；可按类型筛选，例如 /ef 武器 单手剑。",
             "装备目录：默认仅金色；--all 显示全部，--rarity 可选 gold、purple、blue、all。",
@@ -428,6 +440,7 @@ def format_source() -> str:
             f"干员：{source_labels(source_order('operator'))}",
             f"武器：{source_labels(source_order('weapon'))}",
             f"装备：{source_labels(source_order('equipment'))}",
+            f"关卡：{source_labels(source_order('stage'))}",
             "若主数据源暂时不可用或没有可用结果，会按顺序尝试备选源。",
         ]
     )
@@ -443,6 +456,8 @@ def format_error(error: str) -> str:
 
 def format_not_found(scope: str, query: str) -> str:
     label = SCOPE_LABELS.get(scope, "内容")
+    if scope in {"stage", "stage_catalog"}:
+        return f"未找到{label}：{query}\n可以发送 /zmd 副本 浏览关卡资料目录"
     if scope == "equipment_attribute":
         return (
             f"没有同时满足 {query} 的装备。\n"
@@ -523,6 +538,8 @@ def _parse_optional_scope(parts: list[str]) -> tuple[str, list[str]]:
         return "weapon", parts[1:]
     if head in EQUIPMENT_ALIASES:
         return "equipment", parts[1:]
+    if head in STAGE_ALIASES:
+        return "stage", parts[1:]
     return "all", parts
 
 
@@ -549,7 +566,7 @@ def _parse_source_option(parts: list[str]) -> tuple[list[str], str, str]:
 
         normalized = normalize_source(value)
         if not normalized:
-            return remaining, source, f"不支持的数据源 {value}，可选 fz、warfarin"
+            return remaining, source, f"不支持的数据源 {value}，可选 fz、akedata、warfarin"
         if source and source != normalized:
             return remaining, source, "只能指定一个数据源"
         source = normalized

@@ -251,7 +251,7 @@ class EndfieldPerformanceBehaviorTests(unittest.IsolatedAsyncioTestCase):
                 endfield._render_candidate(candidate, "fz"),
             )
             third = await endfield._render_candidate(candidate, "fz")
-        self.assertEqual((first, second, third), (b"png-data", b"png-data", b"png-data"))
+        self.assertEqual((first, second, third), ((b"png-data",), (b"png-data",), (b"png-data",)))
         self.assertEqual(calls, 1)
         self.assertEqual(rendered_sources, ["fz"])
 

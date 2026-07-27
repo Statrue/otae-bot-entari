@@ -8,6 +8,8 @@ from utils.http_client import fetch_json
 
 
 API_CACHE_NAMESPACE = "endfield-api"
+AKEDATA_MAX_TABLE_BYTES = 24 * 1024 * 1024
+AKEDATA_MAX_RESOURCE_BYTES = 6 * 1024 * 1024
 
 
 class WarfarinAPIError(Exception):
@@ -17,6 +19,7 @@ class WarfarinAPIError(Exception):
 class WarfarinClient:
     BASE_URL = "https://api.warfarin.wiki/v1"
     FZ_BASE_URL = "https://api.fz.wiki/api/v1"
+    AKEDATA_BASE_URL = "https://data.akedata.wiki"
 
     def __init__(self, *, timeout: float = 12.0):
         self.timeout = timeout
@@ -51,14 +54,79 @@ class WarfarinClient:
     async def fz_article_summaries(self, prefix: str, *, ns: int = 0) -> dict[str, Any]:
         return await self._get_json(f"{self.FZ_BASE_URL}/articles/summaries", params={"ns": ns, "prefix": prefix})
 
+    async def fz_articles(self, *, category: str = "", ns: int = 0) -> dict[str, Any]:
+        params: dict[str, Any] = {"ns": ns, "all": 1}
+        if category:
+            params["category"] = category
+        return await self._get_json(f"{self.FZ_BASE_URL}/articles", params=params)
+
     async def fz_search(self, query: str, *, limit: int = 8) -> dict[str, Any]:
         return await self._get_json(f"{self.FZ_BASE_URL}/search", params={"q": query, "limit": limit})
 
     async def fz_game_richtext(self) -> dict[str, Any]:
         return await self._get_json(f"{self.FZ_BASE_URL}/game-richtext")
 
-    async def _get_json(self, url: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        source = "FZ Wiki" if url.startswith(self.FZ_BASE_URL) else "Warfarin Wiki"
+    async def akedata_manifest(self) -> dict[str, Any]:
+        return await self._get_json(f"{self.AKEDATA_BASE_URL}/manifest.json")
+
+    async def akedata_table(self, table_cfg_path: str, table_name: str) -> dict[str, Any]:
+        path = str(table_cfg_path or "").strip("/")
+        name = str(table_name or "").strip()
+        if not path or not name or not name.replace("_", "").isalnum():
+            raise WarfarinAPIError("AkeData 表路径无效")
+        return await self._get_json(
+            f"{self.AKEDATA_BASE_URL}/{path}/{name}.json",
+            max_bytes=AKEDATA_MAX_TABLE_BYTES,
+        )
+
+    async def akedata_public_json(self, resource_path: str) -> dict[str, Any] | list[Any]:
+        path = str(resource_path or "").strip().lstrip("/")
+        parts = path.split("/")
+        if (
+            not path.startswith("public/Json/")
+            or not path.endswith(".json")
+            or any(not part or part in {".", ".."} for part in parts)
+        ):
+            raise WarfarinAPIError("AkeData 公共资源路径无效")
+        data = await self._get_json_value(
+            f"{self.AKEDATA_BASE_URL}/{path}",
+            max_bytes=AKEDATA_MAX_RESOURCE_BYTES,
+        )
+        if not isinstance(data, (dict, list)):
+            raise WarfarinAPIError("AkeData 返回结构异常")
+        return data
+
+    async def _get_json(
+        self,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+        max_bytes: int = 10 * 1024 * 1024,
+    ) -> dict[str, Any]:
+        data = await self._get_json_value(url, params=params, max_bytes=max_bytes)
+        if not isinstance(data, dict):
+            if url.startswith(self.FZ_BASE_URL):
+                source = "FZ Wiki"
+            elif url.startswith(self.AKEDATA_BASE_URL):
+                source = "AkeData"
+            else:
+                source = "Warfarin Wiki"
+            raise WarfarinAPIError(f"{source} 返回结构异常")
+        return data
+
+    async def _get_json_value(
+        self,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+        max_bytes: int = 10 * 1024 * 1024,
+    ) -> Any:
+        if url.startswith(self.FZ_BASE_URL):
+            source = "FZ Wiki"
+        elif url.startswith(self.AKEDATA_BASE_URL):
+            source = "AkeData"
+        else:
+            source = "Warfarin Wiki"
         try:
             data = await fetch_json(
                 url,
@@ -66,6 +134,7 @@ class WarfarinClient:
                 params=params,
                 headers=self.headers,
                 timeout_seconds=self.timeout,
+                max_bytes=max_bytes,
             )
         except httpx.TimeoutException as exc:
             raise WarfarinAPIError(f"{source} 请求超时") from exc
@@ -75,6 +144,4 @@ class WarfarinClient:
             raise WarfarinAPIError(f"{source} 返回了无法解析的 JSON") from exc
         except httpx.HTTPError as exc:
             raise WarfarinAPIError(f"{source} 请求失败: {exc}") from exc
-        if not isinstance(data, dict):
-            raise WarfarinAPIError(f"{source} 返回结构异常")
         return data

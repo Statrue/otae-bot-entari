@@ -1,7 +1,5 @@
 # otae Bot Entari
 
-This project is a full local migration of `C:\Code\qqbot\bot-v5.0` to Entari.
-
 The source project was copied as a read-only migration source. Runtime data,
 assets, plugin code, configs, and the real `.env` were copied into this project.
 

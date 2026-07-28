@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -118,27 +119,62 @@ class MedalMissingTest(unittest.TestCase):
 
     def test_cross_reference_categories(self):
         service = EndfieldService.__new__(EndfieldService)
+        # FZ 快照条目用 achv_ id（与游戏客户端一致）
         snapshot = self._snapshot([
-            MedalItemView(medal_id="a", name="A", max_level=1),                       # 已集齐
-            MedalItemView(medal_id="b", name="B", max_level=3, can_be_upgraded=True),  # 未升满
-            MedalItemView(medal_id="c", name="C", max_level=1, can_be_plated=True),    # 未镀层
-            MedalItemView(medal_id="d", name="D"),                                     # 未获得
+            MedalItemView(medal_id="achv_a", name="A", max_level=1),                       # 已集齐
+            MedalItemView(medal_id="achv_b", name="B", max_level=3, can_be_upgraded=True),  # 未升满
+            MedalItemView(medal_id="achv_c", name="C", max_level=1, can_be_plated=True),    # 未镀层
+            MedalItemView(medal_id="achv_d", name="D"),                                     # 未获得
         ])
-        # 森空岛 id 是 hex、FZ 是 achv_，命名空间不同 → 按 name 关联。
-        # 这里 achievementData.id 故意与 medal.medal_id 不同，验证确实按 name 而非 id 关联。
+        # 森空岛 achievementData.id == md5(achv_id)（2026-07-28 实测 115/115）。
+        # skland 名故意写成不同名字，验证关联走 md5-id 而非 name。
         raw_progress = {"data": {"detail": {"achieve": {"achieveMedals": [
-            {"achievementData": {"id": "hex_a", "name": "A"}, "level": 1, "isPlated": True},
-            {"achievementData": {"id": "hex_b", "name": "B"}, "level": 1, "isPlated": False},
-            {"achievementData": {"id": "hex_c", "name": "C"}, "level": 1, "isPlated": False},
+            {"achievementData": {"id": hashlib.md5(b"achv_a").hexdigest(), "name": "森空岛·A"}, "level": 1, "isPlated": True},
+            {"achievementData": {"id": hashlib.md5(b"achv_b").hexdigest(), "name": "森空岛·B"}, "level": 1, "isPlated": False},
+            {"achievementData": {"id": hashlib.md5(b"achv_c").hexdigest(), "name": "森空岛·C"}, "level": 1, "isPlated": False},
         ]}}}}
         view = service.build_medal_missing_view(
             raw_progress, snapshot, nickname="测试", uid="***1234", server_name="测试服"
         )
-        self.assertEqual([m.medal_id for m in view.not_obtained], ["d"])
-        self.assertEqual([m.medal_id for m in view.not_maxed], ["b"])
-        self.assertEqual([m.medal_id for m in view.not_plated], ["c"])
+        self.assertEqual([m.medal_id for m in view.not_obtained], ["achv_d"])
+        self.assertEqual([m.medal_id for m in view.not_maxed], ["achv_b"])
+        self.assertEqual([m.medal_id for m in view.not_plated], ["achv_c"])
         self.assertEqual(view.owned_count, 3)
         self.assertFalse(view.truncated)
+
+    def test_md5_id_resolves_name_collision(self):
+        """武陵·Ⅳ/·Ⅴ 命名撞名：森空岛两枚同名(hex 不同)，md5-id 能精确归属。"""
+        service = EndfieldService.__new__(EndfieldService)
+        snapshot = self._snapshot([
+            MedalItemView(medal_id="achv_wuling_4", name="武陵调度专家奖章·Ⅳ", max_level=1),
+            MedalItemView(medal_id="achv_wuling_5", name="武陵调度专家奖章·Ⅴ", max_level=1),
+        ])
+        # 玩家拥有 _4 和 _5，但森空岛把两枚都标成「·Ⅳ」（命名滞后）
+        raw_progress = {"data": {"detail": {"achieve": {"achieveMedals": [
+            {"achievementData": {"id": hashlib.md5(b"achv_wuling_4").hexdigest(), "name": "武陵调度专家奖章·Ⅳ"}, "level": 1, "isPlated": False},
+            {"achievementData": {"id": hashlib.md5(b"achv_wuling_5").hexdigest(), "name": "武陵调度专家奖章·Ⅳ"}, "level": 1, "isPlated": False},
+        ]}}}}
+        view = service.build_medal_missing_view(
+            raw_progress, snapshot, nickname="测试", uid="***1", server_name="测试服"
+        )
+        # 两枚都应判为已获得（按 md5-id），未获得为空——按 name 会漏判一枚
+        self.assertEqual(view.not_obtained, [])
+        self.assertEqual(view.owned_count, 2)
+
+    def test_name_fallback_when_medal_lacks_achv_id(self):
+        """FZ 条目无 achv_ id 时，回退按规范化 name 关联。"""
+        service = EndfieldService.__new__(EndfieldService)
+        snapshot = self._snapshot([
+            MedalItemView(medal_id="无id条目", name="某章", max_level=1),  # medal_id 非 achv_
+        ])
+        raw_progress = {"data": {"detail": {"achieve": {"achieveMedals": [
+            {"achievementData": {"id": "deadbeef", "name": "某章"}, "level": 1, "isPlated": False},
+        ]}}}}
+        view = service.build_medal_missing_view(
+            raw_progress, snapshot, nickname="t", uid="u", server_name="s"
+        )
+        self.assertEqual(view.not_obtained, [])
+        self.assertEqual(view.owned_count, 1)
 
     def test_truncation_when_too_many(self):
         service = EndfieldService.__new__(EndfieldService)

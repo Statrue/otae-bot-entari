@@ -15,7 +15,7 @@ from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 from time import perf_counter
-from typing import Iterable
+from typing import Any, Iterable
 
 import cv2
 import numpy as np
@@ -819,7 +819,6 @@ MEDAL_CARD_CSS = """
 .medal-desc{margin-top:5px;color:#555;font-size:12px;line-height:1.4}
 .medal-source{display:flex;justify-content:space-between;gap:16px;margin-top:14px;padding-top:10px;border-top:2px solid #222;color:#777;font-size:12px;font-weight:800}
 .medal-levelbar{display:flex;gap:8px;margin-bottom:14px}.medal-levelbar .lv-cell{flex:1;padding:10px 12px;border:1px solid #999;background:#fff;text-align:center}.medal-levelbar .lv-cell span{display:block;color:#666;font-size:13px}.medal-levelbar .lv-cell strong{display:block;margin-top:3px;font-size:26px;line-height:1}
-.medal-item.suspect{border-left:6px solid #c89200;background:#fffdf3}.medal-suspect-flag{display:inline-block;margin-left:6px;padding:1px 7px;border:1px solid #c89200;background:#fff3cf;color:#9a6b00;font-size:11px;font-weight:800}
 """
 
 
@@ -898,7 +897,7 @@ async def _draw_medal_stats_page(
     return await _draw_neutral_card("medal-stats-card", body, extra_css=MEDAL_CARD_CSS)
 
 
-def _medal_item_html(medal: MedalItemView, icon_map: dict[str, str], *, suspect: bool = False) -> str:
+def _medal_item_html(medal: MedalItemView, icon_map: dict[str, str]) -> str:
     data_url = icon_map.get(medal.icon_url, "")
     if data_url:
         icon = f'<div class="medal-icon"><img src="{esc_attr(data_url)}" alt=""></div>'
@@ -915,11 +914,9 @@ def _medal_item_html(medal: MedalItemView, icon_map: dict[str, str], *, suspect:
         meta_parts.append('<span class="tag plate">可镀层</span>')
     meta = f'<div class="medal-meta">{"".join(meta_parts)}</div>' if meta_parts else ""
     desc = f'<div class="medal-desc">{esc(medal.description)}</div>' if medal.description else ""
-    flag = '<span class="medal-suspect-flag">⚠ 可能已拥有</span>' if suspect else ""
-    item_class = "medal-item suspect" if suspect else "medal-item"
     return (
-        f'<div class="{item_class}">{icon}'
-        f'<div class="medal-info"><strong>{esc(medal.name)}</strong>{flag}{meta}{desc}</div>'
+        f'<div class="medal-item">{icon}'
+        f'<div class="medal-info"><strong>{esc(medal.name)}</strong>{meta}{desc}</div>'
         '</div>'
     )
 
@@ -930,9 +927,7 @@ async def draw_medal_missing_card(view: MedalMissingView) -> tuple[bytes, ...]:
     icon_map = await _image_data_urls([m.icon_url for m in all_medals if m.icon_url])
     sections: list[str] = []
     if view.not_obtained:
-        sections.append(_medal_section_html(
-            "未获得", view.not_obtained, icon_map, suspect_names=view.suspect_names
-        ))
+        sections.append(_medal_section_html("未获得", view.not_obtained, icon_map))
     if view.not_maxed:
         sections.append(_medal_section_html("未升满", view.not_maxed, icon_map))
     if view.not_plated:
@@ -979,14 +974,8 @@ def _medal_section_html(
     title: str,
     medals: list[MedalItemView],
     icon_map: dict[str, str],
-    *,
-    suspect_names: set[str] | None = None,
 ) -> str:
-    suspect_names = suspect_names or set()
-    items = "".join(
-        _medal_item_html(medal, icon_map, suspect=medal.name in suspect_names)
-        for medal in medals
-    )
+    items = "".join(_medal_item_html(medal, icon_map) for medal in medals)
     return (
         f'<section class="medal-section"><h2>{esc(title)}（{len(medals)}）</h2>'
         f'<div class="medal-list">{items}</div></section>'
@@ -2432,11 +2421,24 @@ async def _prepare_assets(urls: Iterable[str], *, inline: bool) -> _PreparedAsse
     unique_urls = tuple(dict.fromkeys(str(url) for url in urls if url))
     direct = {url: url for url in unique_urls if url.startswith("data:")}
     remote_urls = [url for url in unique_urls if not url.startswith("data:")]
-    resources = await fetch_many(
-        remote_urls,
-        namespace=REMOTE_ASSET_NAMESPACE,
-        timeout_seconds=10.0,
-    )
+    # 图床（如 assets.fz.wiki）偶发超时/断连，对失败的 url 重试最多 3 轮，
+    # 已成功的走缓存命中，避免单次抖动导致渲染「无图」。
+    resources: dict[str, Any] = {}
+    pending = list(remote_urls)
+    for _ in range(3):
+        if not pending:
+            break
+        batch = await fetch_many(
+            pending,
+            namespace=REMOTE_ASSET_NAMESPACE,
+            timeout_seconds=10.0,
+        )
+        pending = [url for url, resource in batch.items() if resource is None]
+        for url, resource in batch.items():
+            if resource is not None:
+                resources[url] = resource
+    for url in pending:
+        resources[url] = None
     output = dict(direct)
     browser_resources: dict[str, BrowserResource] = {}
     contents: dict[str, bytes] = {}

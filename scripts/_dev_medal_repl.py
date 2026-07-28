@@ -51,7 +51,7 @@ from plugins.endfield.service import EndfieldService
 from utils.http_client import close_http_client
 from utils.image_utils import close_browser
 
-client = WarfarinClient()
+client = WarfarinClient(timeout=30.0)
 service = EndfieldService(client)
 official = EndfieldOfficialClient()
 store = MedalSnapshotStore()

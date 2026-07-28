@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import math
 import re
 import time
@@ -390,11 +391,18 @@ class EndfieldService:
             for entry in _fz_overview_entries(roster_raw)
             if _first_text(entry, "title")
         ]
-        detail_results = await asyncio.gather(
-            *(self.client.fz_article_by_title(title) for title in titles),
-            return_exceptions=True,
-        )
-        detail_raws = [result for result in detail_results if isinstance(result, dict)]
+        # FZ 单件页偶发超时/断连，对失败的 title 重试最多 3 轮把丢页补齐（避免快照残缺）
+        detail_raws: list[dict[str, Any]] = []
+        pending = list(titles)
+        for _ in range(3):
+            if not pending:
+                break
+            results = await asyncio.gather(
+                *(self.client.fz_article_by_title(title) for title in pending),
+                return_exceptions=True,
+            )
+            pending = [title for title, result in zip(pending, results) if isinstance(result, Exception)]
+            detail_raws.extend(result for result in results if isinstance(result, dict))
         return build_fz_medal_snapshot_view(
             roster_raw,
             detail_raws,
@@ -435,15 +443,25 @@ class EndfieldService:
         server_name: str,
         limit: int = 30,
     ) -> MedalMissingView:
-        """F2：SDK 玩家进度 × 全量快照，得出未获得 / 未升满 / 未镀层。"""
-        progress = _parse_player_medal_progress(raw_progress)
+        """F2：SDK 玩家进度 × 全量快照，得出未获得 / 未升满 / 未镀层。
+
+        关联键：``md5(FZ.medal_id) == 森空岛 achievementData.id``（2026-07-28 实测 115/115），
+        比按 name 关联可靠——不受命名滞后影响（如「武陵调度专家奖章·Ⅳ/·Ⅴ」撞名）。
+        FZ 条目缺 ``achv_`` id 时回退按规范化 name（实测 FZ 单件档案均含 achv_ id，兜底基本不触发）。
+        """
+        progress_by_hex, progress_by_name = _parse_player_medal_progress(raw_progress)
         not_obtained: list[MedalItemView] = []
         not_maxed: list[MedalItemView] = []
         not_plated: list[MedalItemView] = []
         for medal in snapshot.medals:
-            if not medal.name:
-                continue
-            info = progress.get(_norm_medal_name(medal.name))
+            achv_id = medal.medal_id or ""
+            info = (
+                progress_by_hex.get(hashlib.md5(achv_id.encode()).hexdigest())
+                if achv_id.startswith("achv_")
+                else None
+            )
+            if info is None and medal.name:  # 兜底：FZ 条目无 achv_ id 时按 name
+                info = progress_by_name.get(_norm_medal_name(medal.name))
             if info is None:
                 not_obtained.append(medal)
                 continue
@@ -452,13 +470,6 @@ class EndfieldService:
             if medal.can_be_plated and not info.plated:
                 not_plated.append(medal)
         owned_count = snapshot.total_count - len(not_obtained)
-        # 启发式：未获得的章若系列名（去等级后缀）出现在玩家进度里，标为「可能已拥有」
-        # （森空岛命名滞后，如·Ⅴ 被标成·Ⅳ）。仅提示，不改变已获得/未获得判定。
-        progress_bases = {_base_name(key) for key in progress}
-        suspect_names = {
-            medal.name for medal in not_obtained
-            if _base_name(medal.name) in progress_bases
-        }
         truncated = False
         if len(not_obtained) + len(not_maxed) + len(not_plated) > limit:
             truncated = True
@@ -479,7 +490,6 @@ class EndfieldService:
             truncated=truncated,
             shown_count=len(not_obtained) + len(not_maxed) + len(not_plated),
             level_counts=dict(snapshot.level_counts),
-            suspect_names=suspect_names,
         )
 
     async def find_weapon_operator_names(self, view: WeaponView) -> list[str]:
@@ -2368,50 +2378,44 @@ def _norm_medal_name(name: str) -> str:
     )
 
 
-_ROMAN_SUFFIX = re.compile(r"[·.・]?\s*[0-9ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫlcdivxLCDIVX]+$")
+def _parse_player_medal_progress(
+    raw: dict[str, Any],
+) -> tuple[dict[str, MedalProgressView], dict[str, MedalProgressView]]:
+    """从森空岛 card/detail 响应提取奖章进度，返回 ``(按 hex id 索引, 按规范化 name 索引)``。
 
+    路径 ``data.detail.achieve.achieveMedals[]``；每枚含 ``achievementData.id`` /
+    ``name`` / ``level`` / ``isPlated``。只有**已获得**的奖章会出现在列表中——不在列表即未获得。
 
-def _base_name(name: str) -> str:
-    """剥离末尾的罗马数字/数字等级后缀，得到奖章「系列名」。
-
-    用于检测森空岛命名滞后（如「武陵调度专家奖章·Ⅴ」被森空岛标成「·Ⅳ」）：
-    未获得的章若系列名出现在玩家进度里，标为「可能已拥有」。
-    启发式，仅作提示，不改变已获得/未获得判定。
-    """
-    normalized = _norm_medal_name(name)
-    stripped = _ROMAN_SUFFIX.sub("", normalized)
-    return stripped if stripped else normalized
-
-
-def _parse_player_medal_progress(raw: dict[str, Any]) -> dict[str, MedalProgressView]:
-    """从森空岛 card/detail 响应提取奖章进度，按规范化 name 索引。
-
-    路径 ``data.detail.achieve.achieveMedals[]``；每枚含 ``achievementData.name`` /
-    ``level`` / ``isPlated``。只有**已获得**的奖章会出现在列表中——不在列表即未获得。
-
-    注：森空岛 ``achievementData.id`` 是 hex 哈希，与 FZ 的 ``achv_`` id 分属不同命名空间，
-    不能按 id 关联，故用 name（规范化后）作为交叉比对键。MedalProgressView.medal_id
-    仅保留森空岛 hex id 备查。
+    **关联键（2026-07-28 实测 115/115 命中）**：森空岛 ``achievementData.id`` 是
+    ``md5(游戏 achv_id)``（32 位 hex），与 FZ 的 ``achv_*`` 经 md5 一一对应，故**主键用 hex id**；
+    name 索引仅作兜底，用于极少数 FZ 缺 ``achv_id`` 的条目（命名滞后会使 name 关联误判，
+    详见 ``docs/skland_medal_id_mapping.md``）。
     """
     achieve = (((raw.get("data") or {}).get("detail") or {}).get("achieve") or {})
-    result: dict[str, MedalProgressView] = {}
+    by_hex: dict[str, MedalProgressView] = {}
+    by_name: dict[str, MedalProgressView] = {}
     for item in achieve.get("achieveMedals") or []:
         if not isinstance(item, dict):
             continue
         meta = item.get("achievementData") or {}
         name = _first_text(meta, "name")
-        if not name:
+        hex_id = _first_text(meta, "id", "achievementId")
+        if not (name or hex_id):
             continue
         plated_raw = item.get("isPlated")
         plated = plated_raw is True or (
             isinstance(plated_raw, str) and plated_raw.strip().lower() in ("true", "1", "yes")
         )
-        result[_norm_medal_name(name)] = MedalProgressView(
-            medal_id=_first_text(meta, "id", "achievementId"),
+        view = MedalProgressView(
+            medal_id=hex_id,
             level=_to_int(item.get("level")),
             plated=plated,
         )
-    return result
+        if hex_id:
+            by_hex[hex_id] = view
+        if name:
+            by_name[_norm_medal_name(name)] = view
+    return by_hex, by_name
 
 
 def build_fz_medal_item(

@@ -292,6 +292,12 @@ class EndfieldService:
     ) -> EquipmentCatalogView:
         raw = await self.client.fz_article_by_title("装备")
         view = build_fz_equipment_catalog_view(raw, group_name, rarity_filter)
+        if group_name:
+            titles = [item.title for group in view.groups for item in group.items]
+            detail_raws = await self._fz_equipment_details(titles)
+            _apply_fz_equipment_catalog_item_details(view, detail_raws)
+            _apply_fz_equipment_catalog_suit_effects(view, list(detail_raws.values()))
+            return view
         representative_titles = [
             group.items[0].title
             for group in view.groups
@@ -1845,21 +1851,10 @@ def build_fz_equipment_attribute_catalog_view(
             detail = detail_raws.get(item.title)
             if not isinstance(detail, dict):
                 continue
-            main, sub, extras = _fz_equipment_attribute_slots(detail)
+            _apply_fz_equipment_catalog_item_detail(item, detail)
+            main, sub = item.main_attribute, item.sub_attribute
             if not _equipment_attributes_match(main, sub, filters):
                 continue
-            item.level = item.level or _fz_equipment_detail_level(detail)
-            item.main_attribute = main
-            item.sub_attribute = sub
-            item.attributes = [
-                attribute
-                for attribute in (
-                    EquipmentCatalogAttributeView(label=main, role="main") if main else None,
-                    EquipmentCatalogAttributeView(label=sub, role="sub") if sub else None,
-                    *extras,
-                )
-                if attribute is not None
-            ]
             items.append(item)
         if items:
             groups.append(EquipmentCatalogGroupView(group.name, items))
@@ -1874,6 +1869,36 @@ def build_fz_equipment_attribute_catalog_view(
     view.groups = groups
     view.total_count = sum(len(group.items) for group in groups)
     return view
+
+
+def _apply_fz_equipment_catalog_item_details(
+    view: EquipmentCatalogView,
+    detail_raws: dict[str, dict[str, Any]],
+) -> None:
+    for group in view.groups:
+        for item in group.items:
+            detail = detail_raws.get(item.title)
+            if isinstance(detail, dict):
+                _apply_fz_equipment_catalog_item_detail(item, detail)
+
+
+def _apply_fz_equipment_catalog_item_detail(
+    item: EquipmentCatalogItemView,
+    detail: dict[str, Any],
+) -> None:
+    main, sub, extras = _fz_equipment_attribute_slots(detail)
+    item.level = item.level or _fz_equipment_detail_level(detail)
+    item.main_attribute = main
+    item.sub_attribute = sub
+    item.attributes = [
+        attribute
+        for attribute in (
+            EquipmentCatalogAttributeView(label=main, role="main") if main else None,
+            EquipmentCatalogAttributeView(label=sub, role="sub") if sub else None,
+            *extras,
+        )
+        if attribute is not None
+    ]
 
 
 def _fz_equipment_detail_level(raw: dict[str, Any]) -> int:

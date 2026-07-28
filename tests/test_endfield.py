@@ -2545,6 +2545,45 @@ class EndfieldServiceTests(unittest.TestCase):
             ["巡行信使护甲", "巡行信使护手"],
         )
 
+    def test_specific_equipment_catalog_view_fetches_and_annotates_every_item(self):
+        details = _sample_fz_equipment_details()
+        client = types.SimpleNamespace(
+            fz_article_by_title=AsyncMock(
+                side_effect=lambda title: _sample_fz_equipment_catalog()
+                if title == "装备"
+                else details[title]
+            )
+        )
+
+        view = asyncio.run(
+            service.EndfieldService(client).get_equipment_catalog_view("长息装备组")
+        )
+
+        self.assertEqual(
+            [call.args[0] for call in client.fz_article_by_title.await_args_list],
+            ["装备", "装备/长息轻护甲", "装备/长息护手"],
+        )
+        self.assertEqual(
+            [
+                (item.name, item.main_attribute, item.sub_attribute)
+                for item in view.groups[0].items
+            ],
+            [
+                ("长息轻护甲", "力量", "敏捷"),
+                ("长息护手", "敏捷", "力量"),
+            ],
+        )
+        self.assertEqual(
+            [(attribute.label, attribute.role) for attribute in view.groups[0].items[0].attributes],
+            [("力量", "main"), ("敏捷", "sub"), ("终结技充能效率", "")],
+        )
+        with patch.object(draw, "fetch_many", AsyncMock(return_value={})):
+            html = asyncio.run(render_equipment_catalog_card_html(view))
+        self.assertEqual(html.count('<span class="catalog-attr-role">主</span>'), 2)
+        self.assertEqual(html.count('<span class="catalog-attr-role">副</span>'), 2)
+        self.assertIn('title="主属性 力量"', html)
+        self.assertIn('title="副属性 敏捷"', html)
+
     def test_equipment_attribute_catalog_view_fetches_details_and_suit_effects(self):
         details = _sample_fz_equipment_details()
         details["装备/长息轻护甲"] = _sample_fz_equipment()
@@ -2618,9 +2657,13 @@ class EndfieldServiceTests(unittest.TestCase):
             )
 
     def test_equipment_catalog_loads_group_suit_effect_from_representative_item(self):
+        details = _sample_fz_equipment_details()
+        details["装备/长息轻护甲"] = _sample_fz_equipment()
         client = types.SimpleNamespace(
             fz_article_by_title=AsyncMock(
-                side_effect=[_sample_fz_equipment_catalog(), _sample_fz_equipment()]
+                side_effect=lambda title: _sample_fz_equipment_catalog()
+                if title == "装备"
+                else details[title]
             )
         )
 
@@ -2636,7 +2679,7 @@ class EndfieldServiceTests(unittest.TestCase):
         self.assertNotIn("3件套组效果", group.suit_effect_description)
         self.assertEqual(
             [call.args[0] for call in client.fz_article_by_title.await_args_list],
-            ["装备", "装备/长息轻护甲"],
+            ["装备", "装备/长息轻护甲", "装备/长息护手"],
         )
 
     def test_build_fz_equipment_catalog_merges_independent_groups(self):

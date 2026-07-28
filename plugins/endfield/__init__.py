@@ -986,17 +986,6 @@ async def _resolve_operator_candidates_warfarin(query: str) -> list[EndfieldCand
         return []
     query = _strip_title_prefix(query, "干员/")
     candidates: list[EndfieldCandidate] = []
-    if _looks_like_operator_slug(query) and not alias_targets("operator", query):
-        candidates.append(
-            EndfieldCandidate(
-                kind="operator",
-                key=query,
-                display_name=query,
-                score=94,
-                source="warfarin",
-                reason="slug",
-            )
-        )
 
     search_data = await client.search(query)
     for item in search_data.get("results") or []:
@@ -1103,17 +1092,6 @@ async def _resolve_weapon_candidates_warfarin(query: str) -> list[EndfieldCandid
         return []
     query = _strip_title_prefix(query, "武器/")
     candidates: list[EndfieldCandidate] = []
-    if _looks_like_operator_slug(query) and not alias_targets("weapon", query):
-        candidates.append(
-            EndfieldCandidate(
-                kind="weapon",
-                key=query,
-                display_name=query,
-                score=94,
-                source="warfarin",
-                reason="slug",
-            )
-        )
 
     search_data = await client.search(query)
     for item in search_data.get("results") or []:
@@ -1591,10 +1569,6 @@ def _dedupe_candidates(candidates: list[EndfieldCandidate]) -> list[EndfieldCand
         if current is None or candidate.score > current.score:
             by_key[key] = candidate
     return sorted(by_key.values(), key=lambda item: item.score, reverse=True)
-
-
-def _looks_like_operator_slug(query: str) -> bool:
-    return re.fullmatch(r"[a-z0-9][a-z0-9-]{2,}", query, flags=re.I) is not None
 
 
 def _strip_title_prefix(query: str, prefix: str) -> str:

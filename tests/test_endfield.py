@@ -253,14 +253,14 @@ class EndfieldCommandParserTests(unittest.TestCase):
         self.assertEqual(aliases.alias_targets("weapon", "228"), ())
         self.assertEqual(aliases.aliases_for("weapon", "不存在的武器"), ())
 
-    def test_candidate_resolvers_use_alias_scoring_before_slug_fallback(self):
+    def test_candidate_resolvers_require_source_verified_entities(self):
         source = (ROOT / "plugins/endfield/__init__.py").read_text(encoding="utf-8")
 
         self.assertIn('score_entity_candidate("operator", query, item.name', source)
         self.assertIn('score_entity_candidate("weapon", query, item.name', source)
         self.assertIn('score_entity_candidate("equipment", query, item.name', source)
-        self.assertIn('_looks_like_operator_slug(query) and not alias_targets("operator", query)', source)
-        self.assertIn('_looks_like_operator_slug(query) and not alias_targets("weapon", query)', source)
+        self.assertNotIn('reason="slug"', source)
+        self.assertNotIn("def _looks_like_operator_slug", source)
         self.assertIn('candidate_kind = "operator" if index == 0 else "gear"', source)
         self.assertIn('allowed_kinds = {"weapon", "equipment"}', source)
 

@@ -87,8 +87,9 @@ F2:  森空岛 card/detail → achieve.achieveMedals[] → {id: 进度} → ×�
 
 ### 森空岛 F2
 - `GET /api/v1/game/endfield/card/detail?roleId=<id>&serverId=<id>`（签名 GET）→ `data.detail.achieve.achieveMedals[]`
-- 每枚：`achievementData.id`（achv_，与 FZ/Warfarin 同命名空间）/ `level` / `isPlated` / `obtainTs`
-- **只有已获得的在列表里**（样本 96/140）→ 不在列表 = 未获得，驱动交叉比对
+- 每枚：`achievementData.id`（**32 位 hex 哈希，与 FZ 的 `achv_` 不同命名空间——本节早先写的「achv_，与 FZ/Warfarin 同命名空间」是错的**）/ `level` / `isPlated` / `obtainTs`
+- **只有已获得的在列表里** → 不在列表 = 未获得，驱动交叉比对
+- ⚠ **关联键更正（2026-07-27 实测，以 `docs/handoff_medal_f2_fix.md` 为准）**：id 命名空间不同，**不能按 id 关联**，F2 改按规范化 `name`（`_norm_medal_name`：去空白+去引号）交叉比对，实测 135/140 命中。原「按 id 关联」假设会导致 `owned` 恒为 0。
 
 ---
 

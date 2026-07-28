@@ -4,6 +4,10 @@
 > 续 `docs/handoff_medal_module.md`（那份是实现交接，但其 §4「id 共享 achv_ 命名空间」是**错的**，以本文件为准）。
 > 生成时间：2026-07-27　·　分支：`dev`　·　基线提交：`ad56b06`
 
+> **✅ 更新（2026-07-28）**：本文 §0/§4 原标「代码未提交」，**现已落库**——逻辑修复在 `7248b8b`（fix(endfield): F2 奖章缺章改按 name 关联），本文档+样例图+调试脚本在 `2bca98b`。`git pull origin dev` 即可拿到全部改动，工作区干净。下文「未提交」字样保留作历史记录。
+>
+> **⚠ 更新（2026-07-28，更重要）**：本文核心方案「**按 name 关联 + suspect 启发式**」**已被推翻**——实测发现森空岛 `achievementData.id == md5(achv_id)`（115/115），F2 已改回**按 `md5(FZ.medal_id)` 关联**，suspect 启发式已删除。详情见 **`docs/skland_medal_id_mapping.md`**（权威）与 `docs/endfield_medal_stats.md` §6。本文「id 命名空间不同、不能按 id 关联」「按 name 关联 135/140」「suspect」等陈述仅作历史记录。
+
 ---
 
 ## 0. 一句话现状

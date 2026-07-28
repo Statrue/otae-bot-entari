@@ -105,13 +105,23 @@
 ## 6. F2 个人缺章
 
 **需求**：通过森空岛查询玩家自己的蚀刻章进度，与全量快照交叉比对，得出：
-- **未获得**：快照中有、玩家进度中无该 `medal_id`；
+- **未获得**：快照中有、玩家进度中无该奖章（**按规范化 `name` 关联，非 id**——见下「数据来源」）；
 - **未升满**：玩家持有但 `can_be_upgraded` 且当前 `level < max_level`；
 - **未镀层**：`can_be_plated` 且玩家未镀层。
 
 **截断口径**：三段合计过多时（默认 > 30）各段截断保留前若干，置 `truncated=True`，图顶提示「缺章过多，仅展示前 N 枚」。
 
-**数据来源（已确认）**：`GET /api/v1/game/endfield/card/detail?roleId=<id>&serverId=<id>`（森空岛签名 GET，query 入签名）。奖章进度在 `data.detail.achieve.achieveMedals[]`，每枚含 `achievementData.id`（`achv_*`，与 FZ/Warfarin 同命名空间）/ `level` / `isPlated`。**只有已获得的奖章出现在列表中**——不在列表即未获得。详见 `docs/skland_endfield_personal_api.md` 与 `docs/skland_endfield_ui_data_inventory.md`。
+**数据来源（已确认）**：`GET /api/v1/game/endfield/card/detail?roleId=<id>&serverId=<id>`（森空岛签名 GET，query 入签名）。奖章进度在 `data.detail.achieve.achieveMedals[]`，每枚含 `achievementData.id`（**32 位 hex = `md5(achv_id)`**）/ `level` / `isPlated`。**只有已获得的奖章出现在列表中**——不在列表即未获得。
+
+> **关联键（2026-07-28 定论，以 `docs/skland_medal_id_mapping.md` 为准）**：森空岛 `achievementData.id` = **`md5(游戏 achv_id)`**，与 FZ 的 `achv_*` 经 md5 一一对应（实测 115/115，且能解释玩家全部 136 枚进度）。**F2 按 `md5(FZ.medal_id) == 森空岛 hex` 关联**（精确，不受命名滞后影响）；FZ 条目缺 `achv_` id 时回退按规范化 name。
+>
+> *历史*：早先以为两源 id 不相关、改按 name 关联（135/140 命中，靠 suspect 启发式补「武陵·Ⅴ」）——但 name 会被命名滞后击穿（武陵·Ⅳ/·Ⅴ 撞名）。改 md5-id 后 owned 136/140、未获得 4（仅活动章），suspect 启发式已删除。
+
+## 6.1 跨源关联实现
+
+- `_parse_player_medal_progress`：解析森空岛响应，返回 `(按 hex id 索引, 按 name 索引)`。
+- `build_medal_missing_view`：对每枚 FZ 章，`md5(medal_id)` 查 hex 索引（主），缺 achv_ id 时按 name（兜底）。
+- 静态元数据（最高等级、可升级、可镀层）以 FZ 为准，森空岛只提供玩家进度（level/isPlated/在不在列表）。
 
 ## 7. 验收标准
 

@@ -235,6 +235,21 @@ class EndfieldCommandParserTests(unittest.TestCase):
             commands.CANDIDATE_SCORE_THRESHOLD,
         )
         self.assertLess(
+            commands.score_entity_candidate("weapon", "NB", "负山", "Mountain Bearer", "武器/负山"),
+            commands.CANDIDATE_SCORE_THRESHOLD,
+        )
+        self.assertFalse(commands._ascii_name_gap_too_large("bearer", "Mountain Bearer"))
+        self.assertFalse(commands._ascii_name_gap_too_large("mb", "Mountain Bearer"))
+        self.assertTrue(commands._ascii_name_gap_too_large("nb", "Mountain Bearer"))
+        self.assertLess(
+            commands.score_entity_candidate("weapon", "猫专武", "四二式·肃阵"),
+            commands.CANDIDATE_SCORE_THRESHOLD,
+        )
+        self.assertGreaterEqual(
+            commands.score_candidate("陈千雨", "陈千语"),
+            commands.CANDIDATE_SCORE_THRESHOLD,
+        )
+        self.assertLess(
             commands.score_entity_candidate("operator", "我", "庄方宜"),
             commands.CANDIDATE_SCORE_THRESHOLD,
         )

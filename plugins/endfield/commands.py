@@ -355,6 +355,12 @@ def score_candidate(query: str, *values: str) -> int:
         normalized_value = _normalize(value)
         if not normalized_value:
             continue
+        if (
+            normalized_query.isascii()
+            and normalized_value.isascii()
+            and _ascii_name_gap_too_large(normalized_query, value)
+        ):
+            continue
         best = max(best, _score_normalized_pair(normalized_query, normalized_value))
         value_keys = _search_keys(value)
         if normalized_query.isascii():
@@ -808,6 +814,20 @@ def _pinyin_syllables(text: str) -> tuple[str, ...]:
     )
 
 
+def _ascii_name_gap_too_large(query: str, value: str) -> bool:
+    words = tuple(part.casefold() for part in re.findall(r"[a-z0-9]+", str(value), flags=re.I))
+    normalized_value = "".join(words)
+    if not query or not normalized_value:
+        return False
+    if query == normalized_value or normalized_value.startswith(query):
+        return False
+    if any(word.startswith(query) or (len(query) >= 3 and query in word) for word in words):
+        return False
+    if len(query) >= 2 and len(words) >= 2 and query == "".join(word[0] for word in words):
+        return False
+    return SequenceMatcher(None, query, normalized_value).ratio() < 0.66
+
+
 def _score_pinyin_syllable_pair(query: tuple[str, ...], value: tuple[str, ...]) -> int:
     if len(query) < 2 or len(query) > len(value):
         return 0
@@ -846,9 +866,16 @@ def _score_normalized_pair(query: str, value: str) -> int:
         return 100
     if (len(query) == 1 and not query.isascii()) or (len(value) == 1 and not value.isascii()):
         return 0
+    if (
+        len(query) == len(value) == 3
+        and not query.isascii()
+        and not value.isascii()
+        and query[1:] == value[1:]
+    ):
+        return 0
     if value.startswith(query):
         return 92
-    if query in value:
+    if query in value and (not query.isascii() or len(query) >= 3):
         return 82
     if value in query:
         return 72

@@ -103,7 +103,7 @@ ENDFIELD_HELP_IMAGE_PATH = (
 )
 CARD_CACHE_TTL_SECONDS = 600.0
 CARD_CACHE_MAX_BYTES = 48 * 1024 * 1024
-CARD_RENDER_VERSION = "endfield-card-v37"
+CARD_RENDER_VERSION = "endfield-card-v38"
 CardCacheKey = tuple[str, str, str, str, str, str, str]
 _CARD_CACHE: AsyncTTLCache[CardCacheKey, tuple[bytes, ...]] = AsyncTTLCache(
     ttl_seconds=CARD_CACHE_TTL_SECONDS,
@@ -963,12 +963,14 @@ async def _resolve_operator_candidates_fz(query: str) -> list[EndfieldCandidate]
                 continue
             name = title.split("/", 1)[-1]
             score = score_entity_candidate("operator", query, name, title)
+            if score < CANDIDATE_SCORE_THRESHOLD:
+                continue
             candidates.append(
                 EndfieldCandidate(
                     kind="operator",
                     key=title,
                     display_name=name,
-                    score=score or 70,
+                    score=score,
                     source="fz",
                     reason="search",
                 )
@@ -994,12 +996,14 @@ async def _resolve_operator_candidates_warfarin(query: str) -> list[EndfieldCand
         slug = str(item.get("slug") or "").strip()
         name = str(item.get("name") or slug).strip()
         score = score_entity_candidate("operator", query, name, slug)
+        if score < CANDIDATE_SCORE_THRESHOLD:
+            continue
         candidates.append(
             EndfieldCandidate(
                 kind="operator",
                 key=slug,
                 display_name=name,
-                score=score or 70,
+                score=score,
                 source="warfarin",
                 reason="search",
             )
@@ -1100,12 +1104,14 @@ async def _resolve_weapon_candidates_warfarin(query: str) -> list[EndfieldCandid
         slug = str(item.get("slug") or "").strip()
         name = str(item.get("name") or slug).strip()
         score = score_entity_candidate("weapon", query, name, slug)
+        if score < CANDIDATE_SCORE_THRESHOLD:
+            continue
         candidates.append(
             EndfieldCandidate(
                 kind="weapon",
                 key=slug,
                 display_name=name,
-                score=score or 70,
+                score=score,
                 source="warfarin",
                 reason="search",
             )

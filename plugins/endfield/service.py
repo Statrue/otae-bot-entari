@@ -2222,9 +2222,9 @@ def _fz_species_info(attrs: dict[str, Any]) -> tuple[str, str]:
 
 def _fz_archive_species(raw: Any) -> str:
     for text in _iter_fz_archive_text(raw):
-        match = re.search(r"【种族】\s*([^【\n\r]+)", clean_text(text))
+        match = re.search(r"【种族】[^\S\r\n]*([^【\n\r]+)", text)
         if match:
-            species = match.group(1).strip()
+            species = clean_text(match.group(1)).strip()
             if species:
                 return species
     return ""

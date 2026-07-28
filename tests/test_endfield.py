@@ -259,6 +259,14 @@ class EndfieldCommandParserTests(unittest.TestCase):
                 commands.score_entity_candidate(kind, "超大杯", name),
                 commands.CANDIDATE_SCORE_THRESHOLD,
             )
+        for kind, query, name in (
+            ("operator", "体力", "弧光"),
+            ("weapon", "异", "向心之引"),
+        ):
+            self.assertLess(
+                commands.score_entity_candidate(kind, query, name),
+                commands.CANDIDATE_SCORE_THRESHOLD,
+            )
 
     def test_alias_library_scores_entities_and_preserves_ambiguity(self):
         self.assertEqual(commands.score_entity_candidate("operator", "lzy", "诀"), 100)
@@ -284,6 +292,7 @@ class EndfieldCommandParserTests(unittest.TestCase):
         self.assertIn('score_entity_candidate("operator", query, item.name', source)
         self.assertIn('score_entity_candidate("weapon", query, item.name', source)
         self.assertIn('score_entity_candidate("equipment", query, item.name', source)
+        self.assertNotIn("score=score or 70", source)
         self.assertNotIn('reason="slug"', source)
         self.assertNotIn("def _looks_like_operator_slug", source)
         self.assertIn('candidate_kind = "operator" if index == 0 else "gear"', source)
@@ -3229,6 +3238,22 @@ class EndfieldServiceTests(unittest.TestCase):
 
         self.assertEqual(view.species_label, "所属")
         self.assertEqual(view.species, "终末地工业")
+
+    def test_build_fz_operator_view_stops_species_at_archive_line(self):
+        raw = _sample_fz_operator()
+        attrs = raw["revision"]["contentJson"]["content"][0]["attrs"]
+        attrs["archive"] = {
+            "archive": [
+                {
+                    "body": "【代号】管理员\n【种族】■■\n\n你什么都回忆不起来。",
+                }
+            ]
+        }
+
+        view = service.build_fz_operator_view(raw)
+
+        self.assertEqual(view.species_label, "种族")
+        self.assertEqual(view.species, "■■")
 
     def test_build_fz_operator_view_formats_talents_and_potentials(self):
         view = service.build_fz_operator_view(_sample_fz_operator())

@@ -844,6 +844,8 @@ def _score_normalized_pair(query: str, value: str) -> int:
         return 0
     if value == query:
         return 100
+    if (len(query) == 1 and not query.isascii()) or (len(value) == 1 and not value.isascii()):
+        return 0
     if value.startswith(query):
         return 92
     if query in value:
@@ -857,8 +859,6 @@ def _score_normalized_pair(query: str, value: str) -> int:
         if diff_count == 1:
             if len(query) >= 3:
                 best = max(best, 82)
-        elif diff_count == 2 and len(query) >= 3:
-            best = max(best, 66)
 
     ratio = SequenceMatcher(None, query, value).ratio()
     if ratio >= 0.86:

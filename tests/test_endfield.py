@@ -234,6 +234,31 @@ class EndfieldCommandParserTests(unittest.TestCase):
             commands.score_entity_candidate("weapon", "栓子", "楔子"),
             commands.CANDIDATE_SCORE_THRESHOLD,
         )
+        self.assertLess(
+            commands.score_entity_candidate("operator", "我", "庄方宜"),
+            commands.CANDIDATE_SCORE_THRESHOLD,
+        )
+        self.assertEqual(commands.score_entity_candidate("operator", "庄", "庄方宜"), 100)
+        self.assertLess(
+            commands.score_entity_candidate("operator", "塞我嘴里", "赛希"),
+            commands.CANDIDATE_SCORE_THRESHOLD,
+        )
+        self.assertEqual(commands.score_entity_candidate("operator", "塞", "赛希"), 100)
+        for name in ("陈千语", "庄方宜", "诀"):
+            self.assertLess(
+                commands.score_entity_candidate("operator", "gay", name),
+                commands.CANDIDATE_SCORE_THRESHOLD,
+            )
+        for kind, name in (
+            ("operator", "狼卫"),
+            ("operator", "卡缪"),
+            ("operator", "庄方宜"),
+            ("weapon", "赫拉芬格"),
+        ):
+            self.assertLess(
+                commands.score_entity_candidate(kind, "超大杯", name),
+                commands.CANDIDATE_SCORE_THRESHOLD,
+            )
 
     def test_alias_library_scores_entities_and_preserves_ambiguity(self):
         self.assertEqual(commands.score_entity_candidate("operator", "lzy", "诀"), 100)

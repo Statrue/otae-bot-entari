@@ -186,5 +186,97 @@ class MedalMissingTest(unittest.TestCase):
         self.assertLessEqual(len(view.not_obtained), 10)  # limit // 3
 
 
+class AkedataMedalSnapshotTest(unittest.TestCase):
+    """AKEData（TableCfg）源快照构建：achv_id 当主键、名字按 text-id 解析、max 来自 levelInfos、
+    图标路径规则、分类/组解析。"""
+
+    def _tables(self):
+        i18n = {
+            "1001": "苏醒测试章",
+            "1002": "谷地测试章",
+            "2001": "测试分类",
+            "2002": "测试组",
+        }
+        achievement = {
+            "achv_test_single": {
+                "name": {"id": "1001", "text": ""},
+                "desc": {"id": "0", "text": ""},
+                "canBeUpgraded": False,
+                "canBePlated": False,
+                "initLevel": 3,
+                "groupId": "achv_group_test",
+                "order": 1,
+                "levelInfos": {"3": {"achieveLevel": 3}},
+            },
+            "achv_test_multi": {
+                "name": {"id": "1002", "text": ""},
+                "canBeUpgraded": True,
+                "canBePlated": True,
+                "initLevel": 2,
+                "groupId": "achv_group_test",
+                "order": 2,
+                "levelInfos": {"2": {"achieveLevel": 2}, "3": {"achieveLevel": 3}},
+            },
+        }
+        type_table = {
+            "achv_type_test": {
+                "categoryName": {"id": "2001", "text": ""},
+                "categoryPriority": 1,
+                "achievementGroupData": [
+                    {"groupId": "achv_group_test", "groupName": {"id": "2002", "text": ""}}
+                ],
+            }
+        }
+        return achievement, type_table, i18n
+
+    def test_build_akedata_snapshot_fields(self):
+        from plugins.endfield.akedata_client import AKEDATA_ICON_BASE
+        from plugins.endfield.service import build_akedata_medal_snapshot
+
+        achievement, type_table, i18n = self._tables()
+        snap = build_akedata_medal_snapshot(
+            achievement, type_table, i18n, fetched_at=1, version_label="vtest"
+        )
+        by_id = {m.medal_id: m for m in snap.medals}
+
+        single = by_id["achv_test_single"]
+        self.assertEqual(single.name, "苏醒测试章")
+        self.assertEqual(single.max_level, 3)  # levelInfos 仅有档 3
+        self.assertFalse(single.can_be_upgraded)
+        self.assertEqual(single.category_name, "测试分类")
+        self.assertEqual(single.group_name, "测试组")
+        self.assertEqual(single.icon_url, f"{AKEDATA_ICON_BASE}/achv_test_single_lv03.png")
+
+        multi = by_id["achv_test_multi"]
+        self.assertEqual(multi.max_level, 3)  # levelInfos 档 2、3 → max 3
+        self.assertTrue(multi.can_be_upgraded)
+        self.assertTrue(multi.can_be_plated)
+        self.assertEqual(multi.icon_url, f"{AKEDATA_ICON_BASE}/achv_test_multi_lv03.png")
+
+        self.assertEqual(snap.source, "akedata")
+        self.assertEqual(snap.total_count, 2)
+        self.assertEqual(snap.level_counts, {3: 2})
+        self.assertEqual(snap.upgradable_count, 1)
+        self.assertEqual(snap.platable_count, 1)
+
+    def test_akedata_snapshot_plugs_into_md5_association(self):
+        """AKEData 快照（achv_id 主键）与森空岛 hex 经 md5 关联，缺章判定正确。"""
+        from plugins.endfield.service import build_akedata_medal_snapshot
+
+        achievement, type_table, i18n = self._tables()
+        snap = build_akedata_medal_snapshot(achievement, type_table, i18n)
+        # 玩家拥有 achv_test_single（hex=md5），未拥有 achv_test_multi
+        raw_progress = {"data": {"detail": {"achieve": {"achieveMedals": [
+            {"achievementData": {"id": hashlib.md5(b"achv_test_single").hexdigest(),
+                                 "name": "别的名字也行"}, "level": 1, "isPlated": False},
+        ]}}}}
+        service = EndfieldService.__new__(EndfieldService)
+        view = service.build_medal_missing_view(
+            raw_progress, snap, nickname="t", uid="u", server_name="s"
+        )
+        self.assertEqual([m.medal_id for m in view.not_obtained], ["achv_test_multi"])
+        self.assertEqual(view.owned_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

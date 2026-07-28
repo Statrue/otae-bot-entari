@@ -362,16 +362,16 @@ async def _handle_command(matcher, event: Event, command: ParsedEndfieldCommand)
 
 
 async def _handle_medal(matcher, command: ParsedEndfieldCommand) -> None:
-    """F1：查看蚀刻章统计/新增；刷新时重抓 FZ 数据并滚动对比基线。"""
+    """F1：查看蚀刻章统计/新增；刷新时重抓 AKEData 数据并滚动对比基线。"""
     if command.action == "medal_refresh":
         async with _MEDAL_LOCK:
-            await matcher.send("正在抓取 FZ 蚀刻章数据，约需 15–25 秒…")
+            await matcher.send("正在抓取 AKEData 蚀刻章数据…")
             started = perf_counter()
             try:
-                snapshot = await service.fetch_medal_snapshot_fz()
-            except WarfarinAPIError as exc:
+                snapshot = await service.fetch_medal_snapshot_akedata()
+            except Exception as exc:
                 logger.warning(f"[endfield] medal refresh failed: {exc}")
-                return await matcher.finish("FZ 数据源暂时不可用，请稍后重试。")
+                return await matcher.finish("AKEData 数据源暂时不可用，请稍后重试。")
             await medal_store.replace_current(snapshot)
             logger.info(
                 f"[endfield] medal snapshot refreshed medals={snapshot.total_count} "

@@ -9,6 +9,7 @@ from typing import Any, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
 from .client import WarfarinAPIError, WarfarinClient
+from .akedata_client import AKEDATA_ICON_BASE
 from .commands import (
     AMBIGUITY_MARGIN,
     CLEAR_SCORE,
@@ -407,6 +408,24 @@ class EndfieldService:
             roster_raw,
             detail_raws,
             fetched_at=fetched_at or int(time.time()),
+        )
+
+    async def fetch_medal_snapshot_akedata(self, *, fetched_at: int | None = None) -> MedalSnapshotView:
+        """抓取 AKEData 全量奖章快照（权威主源）。
+
+        manifest → latest 版本 → AchievementTable + AchievementTypeTable + I18nTextTable_CN，
+        聚合成快照。AKEData 的 ``achv_*`` id 与森空岛 hex 经 md5 关联，故 ``medal_id`` 直接用
+        achv_id。详见 ``docs/skland_medal_id_mapping.md``。
+        """
+        from .akedata_client import fetch_akedata_medal_tables
+
+        achievement, type_table, i18n, version = await fetch_akedata_medal_tables()
+        return build_akedata_medal_snapshot(
+            achievement,
+            type_table,
+            i18n,
+            fetched_at=fetched_at or int(time.time()),
+            version_label=version,
         )
 
     def build_medal_diff(
@@ -2499,6 +2518,110 @@ def build_fz_medal_snapshot_view(
         version=version_label or str(article.get("updatedAt") or "")[:10],
         fetched_at=fetched_at,
         source="fz",
+        total_count=len(medals),
+        level_counts=level_counts,
+        platable_count=platable_count,
+        upgradable_count=upgradable_count,
+        category_counts=category_counts,
+    )
+
+
+# ----- 蚀刻章/奖章（AKEData TableCfg 源：权威主源，CDN 稳定） -----
+
+
+def _i18n_text(i18n: dict[str, Any], obj: Any) -> str:
+    """``{id, text}`` → 按 text-id 在 I18nTextTable 解析出的中文文本。"""
+    if isinstance(obj, dict):
+        return str(i18n.get(str(obj.get("id"))) or "")
+    return ""
+
+
+def build_akedata_medal_snapshot(
+    achievement_table: dict[str, Any],
+    type_table: dict[str, Any],
+    i18n: dict[str, Any],
+    *,
+    fetched_at: int = 0,
+    version_label: str | None = None,
+) -> MedalSnapshotView:
+    """聚合 AKEData AchievementTable + TypeTable + I18nTextTable → 全量奖章快照。
+
+    AKEData 是游戏客户端 TableCfg：``achv_*`` id 直接当 ``medal_id``（与森空岛 hex 经 md5
+    关联），``canBeUpgraded``/``canBePlated`` 是直字段，``levelInfos`` 给逐档 ``achieveLevel``，
+    名字/描述/分类名按 text-id 在 ``i18n`` 解析。图标路径规则：
+    ``<ICON_BASE>/<achvId>_lv<maxLevel:02d>.png``（与站点 ``v3-table-data.js`` 一致）。
+    """
+    # groupId -> (categoryPriority, category_name, group_name)
+    group_map: dict[str, tuple[int, str, str]] = {}
+    for _type_key, tv in (type_table or {}).items():
+        if not isinstance(tv, dict):
+            continue
+        priority = _to_int(tv.get("categoryPriority"))
+        cat_name = _i18n_text(i18n, tv.get("categoryName"))
+        for group in tv.get("achievementGroupData") or []:
+            if not isinstance(group, dict):
+                continue
+            gid = str(group.get("groupId") or "")
+            if gid:
+                group_map[gid] = (priority, cat_name, _i18n_text(i18n, group.get("groupName")))
+
+    medals: list[MedalItemView] = []
+    for achv_id, entry in (achievement_table or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        name = _i18n_text(i18n, entry.get("name"))
+        if not name:
+            continue
+        priority, cat_name, group_name = group_map.get(
+            str(entry.get("groupId") or ""), (999, "", "")
+        )
+        level_infos = entry.get("levelInfos") or {}
+        achieve_levels = sorted(
+            level
+            for level in (
+                _to_int((li or {}).get("achieveLevel")) if isinstance(li, dict) else 0
+                for li in level_infos.values()
+            )
+            if level > 0
+        )
+        init_level = _to_int(entry.get("initLevel")) or (achieve_levels[0] if achieve_levels else 0)
+        max_level = achieve_levels[-1] if achieve_levels else (init_level or 1)
+        medals.append(
+            MedalItemView(
+                medal_id=achv_id,
+                name=name,
+                category_name=cat_name,
+                group_name=group_name,
+                init_level=init_level,
+                max_level=max_level,
+                can_be_upgraded=bool(entry.get("canBeUpgraded")),
+                can_be_plated=bool(entry.get("canBePlated")),
+                order=_to_int(entry.get("order")),
+                icon_url=f"{AKEDATA_ICON_BASE}/{achv_id}_lv{max_level:02d}.png",
+                description=_i18n_text(i18n, entry.get("desc")),
+            )
+        )
+
+    medals.sort(key=lambda medal: (medal.category_name, medal.order, medal.name))
+
+    level_counts: dict[int, int] = {}
+    category_counts: dict[str, int] = {}
+    platable_count = 0
+    upgradable_count = 0
+    for medal in medals:
+        level_counts[medal.max_level] = level_counts.get(medal.max_level, 0) + 1
+        if medal.category_name:
+            category_counts[medal.category_name] = category_counts.get(medal.category_name, 0) + 1
+        if medal.can_be_plated:
+            platable_count += 1
+        if medal.can_be_upgraded:
+            upgradable_count += 1
+
+    return MedalSnapshotView(
+        medals=medals,
+        version=version_label or "",
+        fetched_at=fetched_at,
+        source="akedata",
         total_count=len(medals),
         level_counts=level_counts,
         platable_count=platable_count,

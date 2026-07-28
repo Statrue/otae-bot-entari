@@ -155,9 +155,9 @@ async def cmd_medal_view() -> None:
 
 
 async def cmd_medal_refresh() -> None:
-    print("  正在抓取 FZ 蚀刻章全量数据（约 13s）…")
+    print("  正在抓取 AKEData 蚀刻章全量数据…")
     started = time.perf_counter()
-    snapshot = await service.fetch_medal_snapshot_fz()
+    snapshot = await service.fetch_medal_snapshot_akedata()
     await store.replace_current(snapshot)
     print(f"  已抓取 {snapshot.total_count} 枚，耗时 {time.perf_counter() - started:.1f}s")
     await cmd_medal_view()

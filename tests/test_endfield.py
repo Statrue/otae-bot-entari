@@ -2159,6 +2159,14 @@ class EndfieldServiceTests(unittest.TestCase):
 
         self.assertEqual(rendered, "虚弱效果<@ba.vup>+5%</>。")
 
+    def test_fz_template_supports_unary_minus_value(self):
+        rendered = service._format_fz_template(
+            "无视敌人<@ba.vup>{-ignore_fire_resist:0}</>点抗性。",
+            {"ignore_fire_resist": -20},
+        )
+
+        self.assertEqual(rendered, "无视敌人<@ba.vup>20</>点抗性。")
+
     def test_build_operator_view_extracts_four_skill_levels(self):
         view = build_operator_view(_sample_operator())
 

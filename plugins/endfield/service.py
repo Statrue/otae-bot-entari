@@ -2581,6 +2581,12 @@ def _eval_fz_template_expr(expr: str, values: dict[str, float]) -> float | None:
     expr = expr.strip().lower()
     if not expr:
         return None
+    unary_match = re.fullmatch(r"([+-])([a-z0-9_]+)", expr)
+    if unary_match:
+        value = _fz_template_operand(unary_match.group(2), values)
+        if value is None:
+            return None
+        return -value if unary_match.group(1) == "-" else value
     match = re.fullmatch(
         r"(-?\d+(?:\.\d+)?|[a-z0-9_]+)([+\-*/])(-?\d+(?:\.\d+)?|[a-z0-9_]+)",
         expr,

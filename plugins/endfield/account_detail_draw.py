@@ -232,6 +232,7 @@ def _identity_cell(operator: AccountOperatorView, icon_map: dict[str, str]) -> s
         for label in (operator.profession, operator.weapon_type)
         if label
     ]
+    tags_html = "".join(tags) or '<span class="account-tag">--</span>'
     return (
         '<div class="account-cell account-cell-identity">'
         f'<div class="account-op-portrait">{portrait}'
@@ -239,7 +240,7 @@ def _identity_cell(operator: AccountOperatorView, icon_map: dict[str, str]) -> s
         '<div class="account-op-identity">'
         f'<div class="account-op-name-row"><span class="account-op-name">{esc(operator.name)}</span>'
         f'<span class="rarity-chip">{operator.rarity}★</span></div>'
-        f'<div class="account-op-tags">{"".join(tags) or "<span class=\'account-tag\'>--</span>"}</div>'
+        f'<div class="account-op-tags">{tags_html}</div>'
         f'{_progress_row(operator)}'
         '</div></div>'
     )

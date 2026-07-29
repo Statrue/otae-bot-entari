@@ -362,7 +362,7 @@ async def _handle_command(matcher, event: Event, command: ParsedEndfieldCommand)
 
 
 async def _handle_medal(matcher, command: ParsedEndfieldCommand) -> None:
-    """F1：查看蚀刻章统计/新增；刷新时重抓 AKEData 数据并滚动对比基线。"""
+    """F1：查看蚀刻章统计/新增；刷新时重抓 AKEData 数据 + 上一版本基线（源和源对比）。"""
     if command.action == "medal_refresh":
         async with _MEDAL_LOCK:
             await matcher.send("正在抓取 AKEData 蚀刻章数据…")
@@ -373,17 +373,23 @@ async def _handle_medal(matcher, command: ParsedEndfieldCommand) -> None:
                 logger.warning(f"[endfield] medal refresh failed: {exc}")
                 return await matcher.finish("AKEData 数据源暂时不可用，请稍后重试。")
             await medal_store.replace_current(snapshot)
+            # 版本对比基线：akedata 上一游戏版本（源和源）；抓取失败不阻塞 current
+            baseline = await service.fetch_akedata_baseline()
+            await medal_store.replace_baseline(baseline)
+            baseline_info = (
+                f"{baseline.version}({len(baseline.ids)} ids)" if baseline else "none"
+            )
             logger.info(
                 f"[endfield] medal snapshot refreshed medals={snapshot.total_count} "
-                f"time={perf_counter() - started:.1f}s"
+                f"baseline={baseline_info} time={perf_counter() - started:.1f}s"
             )
 
     current = medal_store.load_current_view()
     if current is None:
         return await matcher.finish("暂无蚀刻章数据，请先发送「/zmd 奖章 刷新」。")
-    previous = medal_store.load_previous_view()
+    baseline = medal_store.load_baseline_view()
     try:
-        diff = service.build_medal_diff(current, previous)
+        diff = service.build_medal_diff(current, baseline)
         pngs = await draw_medal_stats_card(diff)
     except WarfarinAPIError as exc:
         logger.warning(f"[endfield] medal card data failed: {exc}")

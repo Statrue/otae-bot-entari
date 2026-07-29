@@ -37,13 +37,19 @@ AKEDATA_HEADERS = {
 _I18N_MAX_BYTES = 64 * 1024 * 1024
 
 
-async def _get(path: str, *, max_bytes: int = 10 * 1024 * 1024) -> Any:
+async def _get(
+    path: str,
+    *,
+    max_bytes: int = 10 * 1024 * 1024,
+    ttl_seconds: float | None = None,
+) -> Any:
     return await fetch_json(
         f"{AKEDATA_DATA_BASE}{path}",
         namespace="akedata",
         headers=AKEDATA_HEADERS,
         timeout_seconds=30.0,
         max_bytes=max_bytes,
+        **({"ttl_seconds": ttl_seconds} if ttl_seconds is not None else {}),
     )
 
 
@@ -67,3 +73,54 @@ async def fetch_akedata_medal_tables() -> tuple[dict[str, Any], dict[str, Any], 
     type_table = await _get(f"/{table_cfg}/AchievementTypeTable.json")
     i18n = await _get(f"/{table_cfg}/I18nTextTable_CN.json", max_bytes=_I18N_MAX_BYTES)
     return achievement, type_table, i18n, latest
+
+
+def game_version_label(version_id: str) -> str:
+    """manifest 版本 id → 游戏大版本标签 major.minor。
+
+    前两段跟着游戏大版本走（``1.4.4@8764515-7`` → ``1.4``）。同 major.minor 的多个
+    revision 视为同一游戏版本，不当作「上一版本」。
+    """
+    head = str(version_id).split("@", 1)[0]
+    parts = head.split(".")
+    return ".".join(parts[:2]) if len(parts) >= 2 else head
+
+
+def pick_previous_game_version(manifest: dict[str, Any]) -> dict[str, Any] | None:
+    """从 manifest 挑「上一游戏版本」条目：与 latest 的 major.minor 不同的第一个。
+
+    ``versions[]`` 最新在前，但同一游戏版本可能连着多个 revision（仅资源修订不同），
+    故按 major.minor 跳过 latest 自身及同版本 revision，取第一个不同的条目。
+    manifest 无更早游戏版本时返回 None。
+    """
+    latest_id = manifest.get("latest")
+    versions = manifest.get("versions") or []
+    latest_label = game_version_label(latest_id) if latest_id else ""
+    if not latest_label:
+        return None
+    for entry in versions:
+        if not isinstance(entry, dict) or not entry.get("id"):
+            continue
+        if entry.get("id") == latest_id:
+            continue
+        if game_version_label(str(entry["id"])) != latest_label:
+            return entry
+    return None
+
+
+# 历史版本 AchievementTable 内容不变，长 TTL 享缓存（按秒计 = 7 天）。
+HISTORICAL_TABLE_TTL_SECONDS = 7 * 24 * 3600
+
+
+async def fetch_akedata_achievement_table(
+    table_cfg: str, *, ttl_seconds: float | None = HISTORICAL_TABLE_TTL_SECONDS
+) -> dict[str, Any]:
+    """抓指定版本的 ``AchievementTable.json``（按 achv_ id 索引，~175KB）。
+
+    默认长 TTL——历史版本内容恒定；latest 版本调用方可传 None 走默认 600s。
+    """
+    table = await _get(
+        f"/{str(table_cfg).strip('/')}/AchievementTable.json",
+        ttl_seconds=ttl_seconds,
+    )
+    return table if isinstance(table, dict) else {}

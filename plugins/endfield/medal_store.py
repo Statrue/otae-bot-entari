@@ -1,7 +1,7 @@
 """蚀刻章/奖章全量快照存储。
 
-既作版本对比基线（current / previous 两槽，手动刷新时滚动），也作命令读取的
-性能缓存（避免每次 `奖章` 命令都实时抓取 140 个 FZ 详情页）。
+``current`` 槽存当前版本全量快照（命令读取的性能缓存，避免每次 `奖章` 都实时抓取）；
+``baseline`` 槽存版本对比基线（akedata 上一游戏版本 achv_id 集合，源和源对比）。
 
 底层用 ``utils.json_store.JsonStore``（文件 JSON，每次 set 全量重写）。写盘放线程池、
 模块级 ``asyncio.Lock`` 串行化，避免并发刷新互相覆盖。
@@ -16,7 +16,7 @@ from typing import Any
 
 from utils.json_store import JsonStore
 
-from .models import MedalItemView, MedalSnapshotView
+from .models import MedalBaselineView, MedalItemView, MedalSnapshotView
 
 _DEFAULT_PATH = str(Path("data") / "endfield" / "medal_snapshot.json")
 
@@ -32,25 +32,34 @@ class MedalSnapshotStore:
         self._lock = asyncio.Lock()
 
     async def replace_current(self, snapshot: MedalSnapshotView) -> None:
-        """新快照写入 current，原 current 移到 previous。串行 + 写盘放线程池。"""
+        """新快照写入 current。版本对比不再用滚动 previous，改用 baseline（akedata 历史版本）。"""
         current_dict = _snapshot_to_dict(snapshot)
         async with self._lock:
-            previous_dict = self._store.get("current")
-            await asyncio.to_thread(self._persist, previous_dict, current_dict)
+            await asyncio.to_thread(self._persist_current, current_dict)
 
-    def _persist(self, previous_dict: dict[str, Any] | None, current_dict: dict[str, Any]) -> None:
+    def _persist_current(self, current_dict: dict[str, Any]) -> None:
         # 直接改底层 _data 再一次 _save，避免 set() 两次全量写盘
-        self._store._data["previous"] = previous_dict
         self._store._data["current"] = current_dict
+        self._store._data.pop("previous", None)  # 清理旧的滚动基线残留
+        self._store._save()
+
+    async def replace_baseline(self, baseline: MedalBaselineView | None) -> None:
+        """写入版本对比基线（akedata 上一游戏版本的 achv_id 集合）；None 清空。串行 + 写盘放线程池。"""
+        baseline_dict = _baseline_to_dict(baseline) if baseline else None
+        async with self._lock:
+            await asyncio.to_thread(self._persist_baseline, baseline_dict)
+
+    def _persist_baseline(self, baseline_dict: dict[str, Any] | None) -> None:
+        self._store._data["baseline"] = baseline_dict
         self._store._save()
 
     def load_current_view(self) -> MedalSnapshotView | None:
         data = self._store.get("current")
         return _dict_to_snapshot(data) if isinstance(data, dict) else None
 
-    def load_previous_view(self) -> MedalSnapshotView | None:
-        data = self._store.get("previous")
-        return _dict_to_snapshot(data) if isinstance(data, dict) else None
+    def load_baseline_view(self) -> MedalBaselineView | None:
+        data = self._store.get("baseline")
+        return _dict_to_baseline(data) if isinstance(data, dict) else None
 
 
 def _snapshot_to_dict(snapshot: MedalSnapshotView) -> dict[str, Any]:
@@ -97,4 +106,25 @@ def _dict_to_snapshot(data: dict[str, Any]) -> MedalSnapshotView:
         platable_count=int(data.get("platable_count") or 0),
         upgradable_count=int(data.get("upgradable_count") or 0),
         category_counts=category_counts,
+    )
+
+
+def _baseline_to_dict(baseline: MedalBaselineView) -> dict[str, Any]:
+    """MedalBaselineView → 可 JSON 序列化的 dict。"""
+    return {
+        "version": baseline.version,
+        "version_id": baseline.version_id,
+        "ids": list(baseline.ids),
+        "fetched_at": baseline.fetched_at,
+    }
+
+
+def _dict_to_baseline(data: dict[str, Any]) -> MedalBaselineView:
+    raw_ids = data.get("ids")
+    ids = [str(x) for x in raw_ids] if isinstance(raw_ids, list) else []
+    return MedalBaselineView(
+        version=str(data.get("version") or ""),
+        version_id=str(data.get("version_id") or ""),
+        ids=ids,
+        fetched_at=int(data.get("fetched_at") or 0),
     )

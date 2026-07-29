@@ -405,6 +405,19 @@ class MedalSnapshotView:
 
 
 @dataclass(slots=True)
+class MedalBaselineView:
+    """版本对比基线：akedata 上一游戏版本的 achv_id 集合（源和源对比的 previous 方）。
+
+    与本地 current 快照同为 akedata 源数据，口径一致；只存 diff 所需的 id 黑名单，
+    不含名字/图标（新增章展示信息取自 current）。version 用 major.minor（如「1.3」）。
+    """
+    version: str = ""                       # 上一游戏版本 major.minor 标签
+    version_id: str = ""                    # 完整 manifest id，如 "1.3.3@8190425-29"
+    ids: list[str] = field(default_factory=list)   # 上一版本全部 achv_id
+    fetched_at: int = 0
+
+
+@dataclass(slots=True)
 class MedalDiffView:
     """F1 版本对比视图：当前快照 + 相较上一版本的新增奖章。"""
     current: MedalSnapshotView = field(default_factory=MedalSnapshotView)

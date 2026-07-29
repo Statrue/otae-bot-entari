@@ -5,7 +5,7 @@
 
 支持命令（可带或不带 /zmd 前缀）：
   奖章                 读快照出统计图（秒回，需先「奖章 刷新」建快照）
-  奖章 刷新            重新抓取 FZ 全量数据（约 13s）并滚动对比基线
+  奖章 刷新            重新抓取 AKEData 全量数据 + 上一版本基线（源和源对比）
   奖章 缺章 [token]    个人缺章图；交互模式可选 手机号验证码 登录
   发码 <手机号>         发送森空岛登录验证码（手机号方式第一步）
   手机登录 <手机号> <验证码>  验证码换 token、缓存 token、查缺章（第二步）
@@ -143,12 +143,13 @@ async def cmd_medal_view() -> None:
     if current is None:
         print("  暂无快照，请先执行：奖章 刷新")
         return
-    previous = store.load_previous_view()
-    diff = service.build_medal_diff(current, previous)
+    baseline = store.load_baseline_view()
+    diff = service.build_medal_diff(current, baseline)
+    prev_tag = f"相较 {baseline.version} " if baseline else ""
     print(
         f"  总数 {current.total_count} · 等级 {dict(sorted(current.level_counts.items()))}"
         f" · 可镀层 {current.platable_count} · 可升级 {current.upgradable_count}"
-        f" · 本版本新增 {len(diff.new_medals)} · 版本 {current.version}"
+        f" · {prev_tag}本版本新增 {len(diff.new_medals)} · 版本 {current.version}"
     )
     pngs = await draw_medal_stats_card(diff)
     _save_and_open(pngs, "medal_view")
@@ -159,7 +160,10 @@ async def cmd_medal_refresh() -> None:
     started = time.perf_counter()
     snapshot = await service.fetch_medal_snapshot_akedata()
     await store.replace_current(snapshot)
-    print(f"  已抓取 {snapshot.total_count} 枚，耗时 {time.perf_counter() - started:.1f}s")
+    baseline = await service.fetch_akedata_baseline()
+    await store.replace_baseline(baseline)
+    bl = f"{baseline.version}({len(baseline.ids)} ids)" if baseline else "无更早版本"
+    print(f"  已抓取 {snapshot.total_count} 枚 · 基线 {bl} · 耗时 {time.perf_counter() - started:.1f}s")
     await cmd_medal_view()
 
 
@@ -320,7 +324,7 @@ async def repl() -> None:
             break
         if text.lower() in ("帮助", "help", "?"):
             print("  奖章         查看蚀刻章统计图（读快照，秒回）")
-            print("  奖章 刷新    重新抓取 FZ 数据（~13s）并滚动对比基线")
+            print("  奖章 刷新    重新抓取 AKEData 数据并对比上一游戏版本")
             print("  奖章 缺章    个人缺章图（交互选 token / 手机号 / 缓存重查）")
             print("  发码 <手机号>          发送森空岛登录验证码")
             print("  手机登录 <手机号> <验证码>  换 token、缓存、查缺章")

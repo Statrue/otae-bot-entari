@@ -8,8 +8,16 @@ import time
 from typing import Any, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
+from loguru import logger
+
 from .client import WarfarinAPIError, WarfarinClient
-from .akedata_client import AKEDATA_ICON_BASE
+from .akedata_client import (
+    AKEDATA_ICON_BASE,
+    fetch_akedata_achievement_table,
+    fetch_akedata_manifest,
+    game_version_label,
+    pick_previous_game_version,
+)
 from .commands import (
     AMBIGUITY_MARGIN,
     CLEAR_SCORE,
@@ -33,6 +41,7 @@ from .models import (
     LoadoutStatusEffectView,
     LoadoutStatusLevelView,
     LoadoutView,
+    MedalBaselineView,
     MedalDiffView,
     MedalItemView,
     MedalMissingView,
@@ -425,30 +434,53 @@ class EndfieldService:
             type_table,
             i18n,
             fetched_at=fetched_at or int(time.time()),
-            version_label=version,
+            version_label=game_version_label(version),
         )
+
+    async def fetch_akedata_baseline(self, *, fetched_at: int | None = None) -> MedalBaselineView | None:
+        """抓 akedata「上一游戏版本」基线（版本对比的 previous 方，源和源）。
+
+        manifest → pick_previous_game_version → 抓其 AchievementTable（仅取 achv_id 集合）。
+        无更早游戏版本或抓取失败时返回 None，不阻塞 current 快照刷新。
+        """
+        try:
+            manifest = await fetch_akedata_manifest()
+            prev = pick_previous_game_version(manifest)
+            if not prev or not prev.get("tableCfgPath"):
+                return None
+            table = await fetch_akedata_achievement_table(str(prev["tableCfgPath"]).lstrip("/"))
+            ids = [aid for aid, entry in table.items() if isinstance(entry, dict)]
+            return MedalBaselineView(
+                version=game_version_label(str(prev.get("id") or "")),
+                version_id=str(prev.get("id") or ""),
+                ids=ids,
+                fetched_at=fetched_at or int(time.time()),
+            )
+        except Exception as exc:
+            logger.warning(f"[endfield] medal baseline fetch failed: {exc}")
+            return None
 
     def build_medal_diff(
         self,
         current: MedalSnapshotView,
-        previous: MedalSnapshotView | None,
+        baseline: MedalBaselineView | None,
     ) -> MedalDiffView:
-        """对比两份快照筛出新增奖章（id 集合差集）。
+        """对比 current 快照与上一版本基线筛出新增奖章（id 集合差集）。
 
-        previous 为 None（首次快照）时无对比基线，new_medals 为空——
-        「新增」语义需要上一版本，首版只展示总数统计。
+        baseline 为 None（无更早版本 / 抓取失败）时无对比基线，new_medals 为空。
+        双方同为 akedata 源数据，口径一致；previous_version 用 baseline 的 major.minor。
         """
-        if previous is None:
+        if baseline is None:
             return MedalDiffView(current=current, previous_version="", new_medals=[])
-        previous_ids = {medal.medal_id for medal in previous.medals if medal.medal_id}
+        baseline_ids = set(baseline.ids)
         new_medals = [
             medal
             for medal in current.medals
-            if medal.medal_id and medal.medal_id not in previous_ids
+            if medal.medal_id and medal.medal_id not in baseline_ids
         ]
         return MedalDiffView(
             current=current,
-            previous_version=previous.version,
+            previous_version=baseline.version,
             new_medals=new_medals,
         )
 

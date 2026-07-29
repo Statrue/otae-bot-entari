@@ -74,24 +74,28 @@
 
 ### FR-3　版本对比：筛选新增蚀刻章
 
-**需求**：当数据更新后，对比新旧快照，筛出**新增**蚀刻章。
+**需求**：对比 akedata 当前版本与上一游戏版本，筛出**新增**蚀刻章。
 
-**机制**：
-- 本地维护 `current` / `previous` 两槽快照（见 §4）；
-- 以 `medal_id` 为主键做集合差集：**新增** = current 中存在、previous 中不存在的 id；
-- **首次快照无 previous 时，新增列表为空**（仅展示总数统计，「新增」语义需要上一版本）。
+**机制（源和源对比，双方同为 akedata 版本数据）**：
+- 「上一版本」按游戏大版本 major.minor 界定（如 1.4 的上一版本是 1.3；跳过同 major.minor 的多个资源 revision）；
+- 刷新时抓 akedata 当前版本全量 → `current` 快照；同时抓上一游戏版本的 `AchievementTable` → `baseline`（仅 achv_id 集合）；
+- 以 `medal_id` 为主键做集合差集：**新增** = current 中存在、baseline 中不存在的 id；
+- 新增章的展示信息（名字/图标）取自 `current`（即 akedata 当前版本源数据）；
+- **无更早游戏版本或 baseline 抓取失败时**，新增列表为空（仅展示总数统计）。
 
-**同 id 字段变更（官方修正捕获，可选/首版仅记录）**：同 `medal_id` 但 `name` / `max_level` / `can_be_plated` 等发生变化的记录（即官方修正，如「武陵调度专家奖章·Ⅳ→Ⅴ」）。以 FZ 为准时，这类变更可被检测；首版仅记日志，UI「变更」段后续迭代。
+> 不再用本地 `current`/`previous` 滚动基线——稳定 akedata 下 previous 恒为同版本数据、diff 恒空（即本次修复的 bug）。版本对比两方都是 akedata 源数据，口径一致、准确。详见 `docs/handoff_medal_version_diff.md`。
+
+**同 id 字段变更（官方修正捕获，可选/首版仅记录）**：同 `medal_id` 但 `name` / `max_level` / `can_be_plated` 等发生变化的记录（即官方修正，如「武陵调度专家奖章·Ⅳ→Ⅴ」）。首版仅记日志，UI「变更」段后续迭代。
 
 ## 4. 数据快照设计
 
 快照文件：`data/endfield/medal_snapshot.json`（运行时产物，已 gitignore）。
 
-- 结构：`{"current": {version, fetched_at, source, medals[...]}, "previous": {...} | null}`；
+- 结构：`{"current": {version, fetched_at, source, medals[...]}, "baseline": {version, version_id, ids[...], fetched_at} | null}`；
 - **刷新机制（手动双命令）**：
-  - `奖章 刷新`：重新抓取 FZ（roster + 全部单件详情，约 140 次请求，首版约 15–25s）→ 旧 current 移入 previous → 新数据写入 current；
-  - `奖章`：直接读 current 快照（秒回，不触网）；
-- diff 靠 id 集合差集，**不依赖版本号比较**；version 字段仅作展示标签。
+  - `奖章 刷新`：抓 akedata 当前版本（`manifest.latest` 的 AchievementTable + AchievementTypeTable + I18nTextTable_CN，~2.5s）→ `current`；同时抓上一游戏版本的 AchievementTable（仅 id 集合，长缓存）→ `baseline`；
+  - `奖章`：直接读 `current` + `baseline` 快照（秒回，不触网）；
+- diff 靠 id 集合差集，**不依赖版本号比较**；version 字段（major.minor，如「1.4」）仅作展示标签。
 - 写盘串行（`asyncio.Lock`），避免并发刷新互相覆盖。
 
 ## 5. 命令

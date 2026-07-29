@@ -10,7 +10,13 @@ from plugins.endfield.medal_store import (
     _dict_to_snapshot,
     _snapshot_to_dict,
 )
-from plugins.endfield.models import MedalDiffView, MedalItemView, MedalSnapshotView
+from plugins.endfield.akedata_client import game_version_label, pick_previous_game_version
+from plugins.endfield.models import (
+    MedalBaselineView,
+    MedalDiffView,
+    MedalItemView,
+    MedalSnapshotView,
+)
 from plugins.endfield.service import EndfieldService
 
 
@@ -55,61 +61,71 @@ class MedalStoreRoundTripTest(unittest.TestCase):
 
 
 class MedalSnapshotStoreTest(unittest.IsolatedAsyncioTestCase):
-    async def test_replace_current_rolls_previous(self):
+    async def test_current_and_baseline_stored_independently(self):
         with tempfile.TemporaryDirectory() as d:
             path = str(Path(d) / "snap.json")
             store = MedalSnapshotStore(path)
             self.assertIsNone(store.load_current_view())
-            self.assertIsNone(store.load_previous_view())
+            self.assertIsNone(store.load_baseline_view())
 
-            await store.replace_current(_make_snapshot(["a", "b"], version="2026-07-01"))
+            # current 不再滚动 previous：两次 replace_current 只保留最后一次
+            await store.replace_current(_make_snapshot(["a", "b"], version="1.4"))
+            await store.replace_current(_make_snapshot(["a", "b", "c"], version="1.4"))
             cur = store.load_current_view()
-            self.assertIsNotNone(cur)
-            self.assertEqual(cur.version, "2026-07-01")
-            self.assertEqual({m.medal_id for m in cur.medals}, {"a", "b"})
-            self.assertIsNone(store.load_previous_view())  # 首次无 previous
+            self.assertEqual(cur.version, "1.4")
+            self.assertEqual({m.medal_id for m in cur.medals}, {"a", "b", "c"})
 
-            await store.replace_current(_make_snapshot(["a", "b", "c"], version="2026-07-27"))
-            cur2 = store.load_current_view()
-            self.assertEqual(cur2.version, "2026-07-27")
-            self.assertEqual({m.medal_id for m in cur2.medals}, {"a", "b", "c"})
-            prev = store.load_previous_view()
-            self.assertEqual(prev.version, "2026-07-01")
-            self.assertEqual({m.medal_id for m in prev.medals}, {"a", "b"})
+            # baseline 独立存取（akedata 上一版本 achv_id 集合），不影响 current
+            await store.replace_baseline(MedalBaselineView(version="1.3", ids=["a", "b"]))
+            bl = store.load_baseline_view()
+            self.assertIsNotNone(bl)
+            self.assertEqual(bl.version, "1.3")
+            self.assertEqual(set(bl.ids), {"a", "b"})
+            self.assertEqual(cur.total_count, 3)
+
+            # baseline 可清空
+            await store.replace_baseline(None)
+            self.assertIsNone(store.load_baseline_view())
 
     async def test_persists_across_restart(self):
         with tempfile.TemporaryDirectory() as d:
             path = str(Path(d) / "snap.json")
-            await MedalSnapshotStore(path).replace_current(
-                _make_snapshot(["x"], version="restart-test")
-            )
+            store = MedalSnapshotStore(path)
+            await store.replace_current(_make_snapshot(["x"], version="restart-test"))
+            await store.replace_baseline(MedalBaselineView(version="1.3", ids=["x"]))
             reopened = MedalSnapshotStore(path)  # 模拟进程重启重新 _load
             cur = reopened.load_current_view()
             self.assertEqual(cur.version, "restart-test")
             self.assertEqual([m.medal_id for m in cur.medals], ["x"])
+            bl = reopened.load_baseline_view()
+            self.assertEqual(bl.version, "1.3")
+            self.assertEqual(set(bl.ids), {"x"})
 
 
 class MedalDiffTest(unittest.TestCase):
     def test_diff_finds_only_new_ids(self):
         service = EndfieldService.__new__(EndfieldService)  # 不触发 __init__ 的依赖
-        current = _make_snapshot(["a", "b", "c", "d"], version="new")
-        previous = _make_snapshot(["a", "b"], version="old")
-        diff: MedalDiffView = service.build_medal_diff(current, previous)
+        current = _make_snapshot(["a", "b", "c", "d"], version="1.4")
+        baseline = MedalBaselineView(version="1.3", ids=["a", "b"])
+        diff: MedalDiffView = service.build_medal_diff(current, baseline)
         self.assertEqual({m.medal_id for m in diff.new_medals}, {"c", "d"})
-        self.assertEqual(diff.previous_version, "old")
+        self.assertEqual(diff.previous_version, "1.3")
 
     def test_diff_against_none_is_empty(self):
-        # 首次快照无对比基线 → new_medals 为空（只展示总数统计）
+        # 无更早版本 / 基线抓取失败 → new_medals 为空（只展示总数统计）
         service = EndfieldService.__new__(EndfieldService)
-        current = _make_snapshot(["a", "b"], version="new")
+        current = _make_snapshot(["a", "b"], version="1.4")
         diff = service.build_medal_diff(current, None)
         self.assertEqual(diff.new_medals, [])
         self.assertEqual(diff.previous_version, "")
 
-    def test_diff_against_self_is_empty(self):
+    def test_diff_against_baseline_covering_all_is_empty(self):
+        # baseline 含 current 全部 id（自比/本版本无新增）
         service = EndfieldService.__new__(EndfieldService)
-        current = _make_snapshot(["a", "b", "c"], version="v")
-        diff = service.build_medal_diff(current, current)
+        current = _make_snapshot(["a", "b", "c"], version="1.4")
+        diff = service.build_medal_diff(
+            current, MedalBaselineView(version="1.3", ids=["a", "b", "c"])
+        )
         self.assertEqual(diff.new_medals, [])
 
 
@@ -184,6 +200,32 @@ class MedalMissingTest(unittest.TestCase):
         )
         self.assertTrue(view.truncated)
         self.assertLessEqual(len(view.not_obtained), 10)  # limit // 3
+
+
+class AkedataVersionSelectTest(unittest.TestCase):
+    """版本对比的上一版本选择：major.minor 粒度，跳过同版本 revision。"""
+
+    def test_game_version_label(self):
+        self.assertEqual(game_version_label("1.4.4@8764515-7"), "1.4")
+        self.assertEqual(game_version_label("1.3.3@8190425-29"), "1.3")
+        self.assertEqual(game_version_label("1.0.14@5793042-32"), "1.0")
+
+    def _manifest(self, ids):
+        return {"latest": ids[0], "versions": [{"id": i, "tableCfgPath": f"p/{i}"} for i in ids]}
+
+    def test_pick_previous_skips_same_game_version_revisions(self):
+        # 1.4.4 下三个 revision，上一游戏版本应是 1.3.3
+        m = self._manifest([
+            "1.4.4@8764515-7", "1.4.4@8692565-6", "1.4.4@8618533-5",
+            "1.3.3@8190425-29", "1.2.5@7215718-17",
+        ])
+        prev = pick_previous_game_version(m)
+        self.assertIsNotNone(prev)
+        self.assertEqual(prev["id"], "1.3.3@8190425-29")
+
+    def test_pick_previous_none_when_only_one_game_version(self):
+        m = self._manifest(["1.4.4@8764515-7", "1.4.4@8692565-6"])
+        self.assertIsNone(pick_previous_game_version(m))
 
 
 class AkedataMedalSnapshotTest(unittest.TestCase):

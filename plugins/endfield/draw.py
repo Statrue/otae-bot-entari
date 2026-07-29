@@ -58,6 +58,7 @@ from .gacha import (
     calculate_six_star_expectation,
     format_timestamp,
 )
+from .skill_metrics import fz_metric_replaces_generic, is_generic_fz_metric
 
 
 OPERATOR_CARD_WIDTH = 1600
@@ -2713,7 +2714,7 @@ def _rows_for_metric_names(skill: SkillView, names: list[str]) -> list[tuple[str
 
 def _prefer_specific_metric_rows(rows: list[tuple[str, list[str]]]) -> list[tuple[str, list[str]]]:
     rows = _non_empty_metric_rows(rows)
-    specific_names = [name for name, _ in rows if not _is_generic_metric(name)]
+    specific_names = [name for name, _ in rows if not is_generic_fz_metric(name)]
     if not specific_names:
         return rows
     return [(name, values) for name, values in rows if not _generic_metric_shadowed(name, specific_names)]
@@ -2733,20 +2734,8 @@ def _is_top_ultimate_metric(name: str) -> bool:
     return name in {"所需能量", "所需终结技能量", "冷却"}
 
 
-def _is_generic_metric(name: str) -> bool:
-    return name in {"攻击倍率", "失衡值", "持续时间", "技力"}
-
-
 def _generic_metric_shadowed(name: str, specific_names: list[str]) -> bool:
-    if name == "攻击倍率":
-        return any("倍率" in specific for specific in specific_names)
-    if name == "失衡值":
-        return any("失衡值" in specific for specific in specific_names)
-    if name == "持续时间":
-        return any(("持续时间" in specific or "时长" in specific) for specific in specific_names)
-    if name == "技力":
-        return any(("技力" in specific or "终结技能量" in specific) for specific in specific_names)
-    return False
+    return any(fz_metric_replaces_generic(name, specific) for specific in specific_names)
 
 
 def _skill_metric_names(skill: SkillView) -> list[str]:

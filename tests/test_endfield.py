@@ -3226,6 +3226,39 @@ class EndfieldServiceTests(unittest.TestCase):
         self.assertNotIn("冷却", ultimate_rows)
         self.assertNotIn("持续时间", ultimate_rows)
 
+    def test_fz_skill_metrics_keep_base_rows_with_supplemental_param_rows(self):
+        raw = _sample_fz_operator()
+        skill = raw["revision"]["contentJson"]["content"][0]["attrs"]["skills"]["skills"][3]
+        skill["paramTable"] = {
+            "rows": [
+                {"label": "所需终结技能量", "values": ["80"] * 10},
+                {"label": "冷却", "values": ["10s"] * 10},
+                {"label": "伤害倍率", "values": ["640%"] * 10},
+                {"label": "额外伤害倍率", "values": ["480%"] * 10},
+                {"label": "额外失衡值", "values": ["5"] * 10},
+                {"label": "额外持续时间", "values": ["1s"] * 10},
+                {"label": "额外技力", "values": ["3"] * 10},
+            ]
+        }
+
+        view = service.build_fz_operator_view(raw, _sample_richtext())
+        parsed = view.skills[3]
+        parsed_values = parsed.levels[-1].values
+        rows = dict(draw.skill_metric_rows(parsed))
+
+        self.assertEqual(parsed_values["攻击倍率"], "640%")
+        self.assertEqual(parsed_values["失衡值"], "18")
+        self.assertEqual(parsed_values["持续时间"], "2")
+        self.assertEqual(parsed_values["技力"], "12")
+        self.assertEqual(rows["攻击倍率"], ["640%"] * 4)
+        self.assertEqual(rows["额外伤害倍率"], ["480%"] * 4)
+        self.assertEqual(rows["失衡值"], ["15", "16", "17", "18"])
+        self.assertEqual(rows["额外失衡值"], ["5"] * 4)
+        self.assertEqual(rows["持续时间"], ["1.7", "1.8", "1.9", "2"])
+        self.assertEqual(rows["额外持续时间"], ["1s"] * 4)
+        self.assertEqual(rows["技力"], ["9", "10", "11", "12"])
+        self.assertEqual(rows["额外技力"], ["3"] * 4)
+
     def test_build_fz_operator_view_uses_raw_fz_asset_urls(self):
         raw = _sample_fz_operator()
         attrs = raw["revision"]["contentJson"]["content"][0]["attrs"]

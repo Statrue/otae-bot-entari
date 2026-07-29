@@ -46,6 +46,7 @@ from .models import (
     WeaponView,
 )
 from .sources import source_order
+from .skill_metrics import fz_metric_replaces_generic
 
 
 INDEPENDENT_EQUIPMENT_GROUP_NAMES = frozenset({"纾难装备组", "涉渊装备组"})
@@ -2352,12 +2353,9 @@ def _build_fz_skill_levels(raw: Any, param_values: list[dict[str, str]] | None =
 
 
 def _drop_generic_fz_metrics(mapped_values: dict[str, str], param_row: dict[str, str]) -> None:
-    if any("倍率" in name and name != "攻击倍率" for name in param_row):
-        mapped_values.pop("攻击倍率", None)
-    if any("失衡值" in name and name != "失衡值" for name in param_row):
-        mapped_values.pop("失衡值", None)
-    if any(("技力" in name or "终结技能量" in name) and name != "技力" for name in param_row):
-        mapped_values.pop("技力", None)
+    for generic_name in tuple(mapped_values):
+        if any(fz_metric_replaces_generic(generic_name, specific_name) for specific_name in param_row):
+            mapped_values.pop(generic_name, None)
 
 
 def _build_fz_effects(raw: Any, kind: str) -> list[EffectView]:

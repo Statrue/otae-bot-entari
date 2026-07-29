@@ -50,6 +50,13 @@ aliases_module = _load(f"{PACKAGE}.aliases", "plugins/endfield/aliases.py")
 sources_module = _load(f"{PACKAGE}.sources", "plugins/endfield/sources.py")
 commands_module = _load(f"{PACKAGE}.commands", "plugins/endfield/commands.py")
 draw_module = _load(f"{PACKAGE}.draw", "plugins/endfield/draw.py")
+account_detail_models_module = _load(
+    f"{PACKAGE}.account_detail_models", "plugins/endfield/account_detail_models.py"
+)
+account_detail_module = _load(
+    f"{PACKAGE}.account_detail_service", "plugins/endfield/account_detail_service.py"
+)
+COMPACT_THRESHOLD = account_detail_models_module.COMPACT_THRESHOLD
 
 
 class EndfieldPersonalCommandTests(unittest.TestCase):
@@ -80,10 +87,276 @@ class EndfieldPersonalCommandTests(unittest.TestCase):
         self.assertTrue(commands_module.parse_command("抽卡记录 主账号 0").error)
         self.assertTrue(commands_module.parse_command("抽卡记录 --池").error)
 
-    def test_help_documents_multiple_account_binding(self):
+    def test_account_command_keeps_optional_selector_without_error(self):
+        bare = commands_module.parse_command("账号")
+        self.assertEqual((bare.action, bare.account_selector, bare.error), ("accounts", "", ""))
+        numbered = commands_module.parse_command("账号 2")
+        self.assertEqual((numbered.action, numbered.account_selector), ("accounts", "2"))
+        named = commands_module.parse_command("账户 小明")
+        self.assertEqual((named.action, named.account_selector), ("accounts", "小明"))
+        self.assertEqual(commands_module.parse_command("accounts").account_selector, "")
+
+    def test_help_documents_account_detail_command(self):
         help_text = commands_module.format_help()
+        self.assertIn("/zmd 账号 [编号]", help_text)
         self.assertIn("/zmd 添加账号", help_text)
         self.assertIn("可重复追加多个账号", help_text)
+
+
+def account_detail_fixture() -> dict:
+    def skill(
+        skill_id: str,
+        name: str,
+        type_key: str,
+        type_value: str,
+        property_key: str,
+        property_value: str,
+    ) -> dict:
+        return {
+            "id": skill_id,
+            "name": name,
+            "type": {"key": type_key, "value": type_value},
+            "property": {"key": property_key, "value": property_value},
+            "iconUrl": f"https://assets.invalid/skill-{skill_id}.png",
+        }
+
+    skills = [
+        skill(
+            "normal", "普通攻击", "skill_type_normal_attack", "普通攻击",
+            "skill_property_physical", "物理",
+        ),
+        skill(
+            "battle", "战技", "skill_type_normal_skill", "战技",
+            "skill_property_fire", "灼热",
+        ),
+        skill(
+            "combo", "连携技", "skill_type_combo_skill", "连携技",
+            "skill_property_natural", "自然",
+        ),
+        skill(
+            "ultimate", "终结技", "skill_type_ultimate_skill", "终结技",
+            "skill_property_pulse", "电磁",
+        ),
+    ]
+
+    def equip(name: str, rarity_key: str, type_value: str, suit: dict | None) -> dict:
+        return {
+            "equipData": {
+                "name": name,
+                "iconUrl": f"https://assets.invalid/{name}.png",
+                "rarity": {"key": rarity_key, "value": "金色品质"},
+                "type": {"key": "equip_type_body", "value": type_value},
+                "level": {"key": "equip_level_70", "value": "70"},
+                "suit": suit,
+            }
+        }
+
+    suit = {"id": "suit-a", "name": "测试套组"}
+    veteran = {
+        "id": "char-veteran",
+        "level": 90,
+        "evolvePhase": 4,
+        "potentialLevel": 5,
+        "charData": {
+            "id": "char-veteran",
+            "name": "测试老兵",
+            "rarity": {"key": "rarity_6", "value": "6"},
+            "profession": {"key": "profession_guard", "value": "近卫"},
+            "property": {"key": "char_property_cryst", "value": "寒冷"},
+            "weaponType": {"key": "weapon_type_sword", "value": "单手剑"},
+            "avatarSqUrl": "https://assets.invalid/veteran-square.png",
+            "skills": skills,
+        },
+        # userSkills is emitted in a different order than charData.skills on purpose.
+        "userSkills": {
+            "ultimate": {"level": 12, "maxLevel": 12},
+            "normal": {"level": 9, "maxLevel": 12},
+            "combo": {"level": 10, "maxLevel": 12},
+            "battle": {"level": 11, "maxLevel": 12},
+        },
+        "bodyEquip": equip("测试护甲", "equip_rarity_5", "护甲", suit),
+        "armEquip": equip("测试护手", "equip_rarity_5", "护手", suit),
+        "secondAccessory": equip("测试配件", "equip_rarity_4", "配件", None),
+        "tacticalItem": {
+            "tacticalItemData": {
+                "name": "测试软饮",
+                "iconUrl": "https://assets.invalid/tactical.png",
+            }
+        },
+        "weapon": {
+            "level": 90,
+            "refineLevel": 5,
+            "breakthroughLevel": 4,
+            "weaponData": {
+                "name": "测试武器",
+                "iconUrl": "https://assets.invalid/weapon.png",
+                "rarity": {"key": "rarity_6", "value": "6"},
+                "type": {"key": "weapon_type_sword", "value": "单手剑"},
+                "skills": [
+                    {"key": "wpn_attr_main_high", "value": "主能力提升"},
+                    {"key": "wpn_sp_attr_atk_high", "value": "攻击提升"},
+                    {"key": "sk_wpn_sword_0001", "value": "测试专属技能"},
+                ],
+            },
+            "gem": {"icon": "", "gemData": {"name": "测试基质", "icon": "https://assets.invalid/gem.png"}},
+        },
+    }
+    rookie = {
+        "id": "char-rookie",
+        "level": 1,
+        "evolvePhase": 0,
+        "potentialLevel": 0,
+        "charData": {
+            "id": "char-rookie",
+            "name": "测试新兵",
+            "rarity": {"key": "rarity_4", "value": "4"},
+            "profession": {"key": "profession_caster", "value": "术师"},
+            "property": {"key": "char_property_fire", "value": "灼热"},
+            "weaponType": {"key": "weapon_type_pistol", "value": "手铳"},
+            "avatarSqUrl": "https://assets.invalid/rookie-square.png",
+            "skills": skills,
+        },
+        "userSkills": {},
+        "weapon": {
+            "level": 1,
+            "refineLevel": 0,
+            "breakthroughLevel": 0,
+            "weaponData": {"name": "初始武器", "rarity": {"key": "rarity_3", "value": "3"}},
+            "gem": None,
+        },
+    }
+    return {
+        "base": {
+            "serverName": "",
+            "name": "测试管理员",
+            "level": 60,
+            "worldLevel": 7,
+            "mainMission": {"id": "", "description": "余晖未却"},
+            "avatarUrl": "https://assets.invalid/avatar.png",
+            "charNum": 2,
+            "weaponNum": 56,
+            "docNum": 255,
+            "saveTime": "1784509224",
+        },
+        "chars": [rookie, veteran],
+        "achieve": {"count": 111},
+        "dungeon": {"curStamina": "269", "maxStamina": "360", "maxTs": "1784548592"},
+        "bpSystem": {"curLevel": 36, "maxLevel": 60},
+        "dailyMission": {"dailyActivation": 0, "maxDailyActivation": 100},
+        "weeklyMission": {"score": 0, "total": 10},
+        "domain": [{"name": "武陵", "level": 23, "factory": None}],
+        "crisisContract": [{"highest": 44}],
+        "currentTs": "1784509280",
+    }
+
+
+class EndfieldAccountDetailViewTests(unittest.TestCase):
+    def build(self) -> object:
+        return account_detail_module.build_account_detail_view(
+            account_detail_fixture(), uid="****1234", server_name="China",
+            currency_balances={1: 297, 2: 52780, 3: 7500},
+        )
+
+    def test_reads_base_identity_and_account_stats(self):
+        view = self.build()
+        self.assertEqual(
+            (view.nickname, view.uid, view.server_name, view.level, view.world_level, view.main_mission),
+            ("测试管理员", "****1234", "China", 60, 7, "余晖未却"),
+        )
+        stats = {stat.label: stat.value for stat in view.stats}
+        self.assertEqual(
+            [stat.label for stat in view.stats],
+            ["理智", "日常", "周常", "通行证", "嵌晶玉", "源石", "武库配额"],
+        )
+        self.assertEqual(stats["理智"], "269 / 360")
+        self.assertEqual(stats["日常"], "0 / 100")
+        self.assertEqual(stats["周常"], "0 / 10")
+        self.assertEqual(stats["通行证"], "36 / 60")
+        self.assertEqual(stats["嵌晶玉"], "52780")
+        self.assertEqual(stats["源石"], "297")
+        self.assertEqual(stats["武库配额"], "7500")
+
+    def test_sorts_operators_by_rarity_then_level(self):
+        view = self.build()
+        self.assertEqual([operator.name for operator in view.operators], ["测试老兵", "测试新兵"])
+        self.assertEqual(view.operators[0].rarity, 6)
+        self.assertFalse(view.compact)
+
+    def test_reads_string_typed_numerics_and_progression(self):
+        veteran = self.build().operators[0]
+        self.assertEqual(
+            (veteran.level, veteran.evolve_phase, veteran.potential_level, veteran.rarity),
+            (90, 4, 5, 6),
+        )
+        self.assertEqual((veteran.profession, veteran.element, veteran.weapon_type), ("近卫", "寒冷", "单手剑"))
+        self.assertEqual(veteran.element_color, account_detail_module.ELEMENT_COLORS["char_property_cryst"])
+
+    def test_pairs_skill_levels_by_chardata_order(self):
+        veteran = self.build().operators[0]
+        self.assertEqual([skill.name for skill in veteran.skills], ["普通攻击", "战技", "连携技", "终结技"])
+        self.assertEqual([skill.level for skill in veteran.skills], [9, 11, 10, 12])
+        self.assertEqual([skill.max_level for skill in veteran.skills], [12, 12, 12, 12])
+
+    def test_reads_per_skill_damage_property_and_ultimate_type(self):
+        skills = self.build().operators[0].skills
+        self.assertEqual(account_detail_module.ELEMENT_COLORS["char_property_pulse"], "#f0cf2f")
+        self.assertEqual([skill.damage_type for skill in skills], ["物理", "灼热", "自然", "电磁"])
+        self.assertEqual(
+            [skill.damage_color for skill in skills],
+            ["#969a99", "#ec654d", "#77c92f", "#f0cf2f"],
+        )
+        self.assertEqual([skill.is_ultimate for skill in skills], [False, False, False, True])
+        self.assertEqual([skill.mastery_level for skill in skills], [0, 2, 1, 3])
+
+    def test_keeps_four_positional_equip_slots_with_holes(self):
+        veteran, rookie = self.build().operators
+        self.assertEqual(len(veteran.equips), 4)
+        self.assertEqual(
+            [equip.name if equip else None for equip in veteran.equips],
+            ["测试护甲", "测试护手", None, "测试配件"],
+        )
+        self.assertEqual([equip.slot_label for equip in veteran.equips if equip], ["护甲", "护手", "配件Ⅱ"])
+        self.assertEqual(veteran.equips[0].rarity, 5)
+        self.assertEqual(veteran.equips[3].suit_name, "")
+        self.assertEqual(rookie.equips, (None, None, None, None))
+        self.assertEqual(rookie.equipped_count, 0)
+
+    def test_reads_weapon_potential_and_prefers_gem_data_icon(self):
+        veteran, rookie = self.build().operators
+        self.assertEqual(
+            (veteran.weapon.name, veteran.weapon.level, veteran.weapon.potential_level, veteran.weapon.breakthrough_level),
+            ("测试武器", 90, 5, 4),
+        )
+        self.assertEqual(veteran.weapon.gem_icon_url, "https://assets.invalid/gem.png")
+        self.assertEqual(veteran.weapon.rarity, 6)
+        self.assertEqual(rookie.weapon.gem_icon_url, "")
+        self.assertEqual(rookie.tactical_name, "")
+
+    def test_tolerates_missing_sections_without_fabricating_zero(self):
+        for detail in ({}, {"base": None, "chars": None}, {"base": {}, "chars": [{}]}):
+            view = account_detail_module.build_account_detail_view(detail, uid="****0000")
+            self.assertIsNone(view.level)
+            self.assertIsNone(view.world_level)
+            self.assertEqual(view.uid, "****0000")
+        sparse = account_detail_module.build_account_detail_view({"chars": [{}]}, uid="x").operators[0]
+        self.assertEqual((sparse.level, sparse.evolve_phase, sparse.potential_level), (None, None, None))
+        self.assertIsNone(sparse.weapon)
+        self.assertEqual(sparse.equips, (None, None, None, None))
+        self.assertEqual(sparse.skills, ())
+
+    def test_compact_layout_switches_above_threshold(self):
+        detail = account_detail_fixture()
+        template = detail["chars"][0]
+        roster = COMPACT_THRESHOLD + 1
+        detail["chars"] = [dict(template, id=f"char-{index}") for index in range(roster)]
+        view = account_detail_module.build_account_detail_view(detail, uid="x")
+        self.assertTrue(view.compact)
+        self.assertEqual(
+            (view.identity_column, view.portrait_size, view.slot_size, view.skill_icon_size),
+            (300, 68, 54, 44),
+        )
+        detail["chars"] = detail["chars"][:COMPACT_THRESHOLD]
+        self.assertFalse(account_detail_module.build_account_detail_view(detail, uid="x").compact)
 
 
 class EndfieldCredentialAndStoreTests(unittest.TestCase):
@@ -614,6 +887,80 @@ class EndfieldOfficialClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["headers"]["sign"], expected)
         self.assertEqual(captured["headers"]["sk-game-role"], "3_role_server")
         self.assertEqual(captured["content"], b"")
+        await http.aclose()
+
+    async def test_card_detail_signs_the_urlencoded_get_query(self):
+        captured = {}
+
+        async def handler(request: httpx.Request):
+            captured["headers"] = request.headers
+            captured["url"] = request.url
+            captured["content"] = request.content
+            return httpx.Response(200, json={"code": 0, "data": {"detail": {"base": {"name": "otae"}}}})
+
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client = client_module.EndfieldOfficialClient(http)
+        context = client_module._SklandContext("cred", "sign-token", 1000, 1000, 99999)
+        client._skland_context = mock.AsyncMock(return_value=context)
+        role = mock.Mock(role_id="role-a", server_id="1")
+        with mock.patch.object(client_module.time, "time", return_value=1000):
+            detail = await client.card_detail("account-token", role)
+
+        timestamp = "1000"
+        query = "roleId=role-a&serverId=1"
+        sign_headers = {"platform": "3", "timestamp": timestamp, "dId": "", "vName": "1.0.0"}
+        canonical = "/api/v1/game/endfield/card/detail" + query + timestamp + json.dumps(
+            sign_headers, ensure_ascii=False, separators=(",", ":")
+        )
+        digest = hmac.new(b"sign-token", canonical.encode(), hashlib.sha256).hexdigest()
+        self.assertEqual(captured["headers"]["sign"], hashlib.md5(digest.encode()).hexdigest())
+        self.assertEqual(captured["url"].query, query.encode())
+        self.assertNotIn("sk-game-role", captured["headers"])
+        self.assertEqual(captured["content"], b"")
+        self.assertEqual(detail, {"base": {"name": "otae"}})
+        self.assertTrue(client._skland_context.await_args.kwargs["refresh"])
+        await http.aclose()
+
+    async def test_card_detail_rejects_missing_detail_payload(self):
+        async def handler(request: httpx.Request):
+            return httpx.Response(200, json={"code": 0, "data": {}})
+
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client = client_module.EndfieldOfficialClient(http)
+        client._skland_context = mock.AsyncMock(
+            return_value=client_module._SklandContext("cred", "sign-token", 1000, 1000, 99999)
+        )
+        with mock.patch.object(client_module.time, "time", return_value=1000):
+            with self.assertRaises(client_module.EndfieldAPIError) as caught:
+                await client.card_detail("account-token", mock.Mock(role_id="role-a", server_id="1"))
+        self.assertIn("查询终末地档案", str(caught.exception))
+        await http.aclose()
+
+    async def test_currency_balances_reuse_account_and_u8_tokens(self):
+        captured = []
+
+        async def handler(request: httpx.Request):
+            body = json.loads(request.content)
+            captured.append((body["currencyType"], request.headers))
+            return httpx.Response(200, json={
+                "code": 0,
+                "data": {"list": [{"currencyType": body["currencyType"], "after": body["currencyType"] * 100}]},
+            })
+
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client = client_module.EndfieldOfficialClient(http)
+        client.get_u8_token = mock.AsyncMock(return_value="u8-token")
+        role = mock.Mock(binding_uid="binding", server_id="1")
+
+        balances = await client.currency_balances("account-token", role)
+
+        self.assertEqual(balances, {1: 100, 2: 200, 3: 300})
+        self.assertEqual({currency_type for currency_type, _headers in captured}, {1, 2, 3})
+        for _currency_type, headers in captured:
+            self.assertEqual(headers["x-account-token"], "account-token")
+            self.assertEqual(headers["x-role-token"], "u8-token")
+            self.assertEqual(headers["x-role-server-id"], "1")
+        client.get_u8_token.assert_awaited_once_with("account-token", "binding")
         await http.aclose()
 
     async def test_character_and_weapon_record_mapping(self):

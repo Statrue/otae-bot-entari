@@ -64,6 +64,8 @@ from .draw import (
     draw_gacha_analysis_cards,
     draw_gacha_history_card,
 )
+from .account_detail_draw import draw_account_detail_cards
+from .account_detail_service import build_account_detail_view
 from .stage_draw import draw_stage_card, draw_stage_catalog_cards
 from .stage_service import EndfieldStageService, StageVariantNotFound
 from .stage_source import StageDataIncomplete
@@ -319,7 +321,7 @@ async def _handle_command(matcher, event: Event, command: ParsedEndfieldCommand)
 
 
 async def _handle_personal_command(matcher, event: Event, command: ParsedEndfieldCommand) -> None:
-    private_only = {"bind", "accounts", "primary", "unbind", "gacha_import"}
+    private_only = {"bind", "primary", "unbind", "gacha_import"}
     if command.action in private_only and is_group(event):
         return await matcher.finish("该命令涉及账号凭据或手机号，仅支持私聊使用。")
     qq_user_id = str(event_user_id(event))
@@ -329,7 +331,8 @@ async def _handle_personal_command(matcher, event: Event, command: ParsedEndfiel
             cipher = CredentialCipher.from_env()
             return await _handle_binding(matcher, qq_user_id, cipher)
         if command.action == "accounts":
-            return await matcher.finish(_format_accounts(account_store.list_roles(qq_user_id), reveal_uid=True))
+            cipher = CredentialCipher.from_env()
+            return await _handle_accounts(matcher, qq_user_id, command, cipher, group=is_group(event))
         if command.action == "primary":
             role = account_store.set_primary(qq_user_id, command.account_selector)
             return await matcher.finish(
@@ -449,6 +452,61 @@ async def _select_binding_roles(roles: list[RoleCandidate]) -> list[RoleCandidat
     if not indexes or any(index < 0 or index >= len(roles) for index in indexes):
         return None
     return [role for index, role in enumerate(roles) if index in indexes]
+
+
+async def _handle_accounts(
+    matcher, qq_user_id: str, command: ParsedEndfieldCommand, cipher: CredentialCipher, *, group: bool
+) -> None:
+    roles = account_store.list_roles(qq_user_id)
+    if not roles:
+        return await matcher.finish("尚未绑定终末地账号。使用 /zmd 绑定 开始绑定。")
+    if command.account_selector:
+        role = account_store.resolve_role(qq_user_id, command.account_selector)
+        if role is None:
+            return await matcher.finish("未找到对应账号，请使用 /zmd 账号 查看编号。")
+        return await _render_account_detail(matcher, role, cipher, group=group)
+    if len(roles) == 1:
+        return await _render_account_detail(matcher, roles[0], cipher, group=group)
+
+    answer = await prompt_silently(
+        _format_accounts(roles, reveal_uid=not group, detail_hint=True), timeout=60
+    )
+    if answer is None:
+        return await matcher.finish()
+    text = answer.extract_plain_text() if hasattr(answer, "extract_plain_text") else str(answer or "")
+    text = text.strip()
+    if not text or text.casefold() in {"取消", "cancel", "q", "quit"}:
+        return await matcher.finish("已取消账号查询。")
+    selection = parse_candidate_selection(text, len(roles))
+    role = roles[selection] if selection is not None else account_store.resolve_role(qq_user_id, text)
+    if role is None:
+        return await matcher.finish(f"编号无效，请输入 1-{len(roles)}。")
+    return await _render_account_detail(matcher, role, cipher, group=group)
+
+
+async def _render_account_detail(
+    matcher, role: EndfieldRole, cipher: CredentialCipher, *, group: bool
+) -> None:
+    token = account_store.decrypt_token(role, cipher)
+    async def load_currency_balances() -> dict[int, int]:
+        try:
+            return await official_client.currency_balances(token, role)
+        except EndfieldAPIError as exc:
+            logger.warning(f"[endfield] account currency unavailable operation={exc.operation}")
+            return {}
+
+    detail, currency_balances = await asyncio.gather(
+        official_client.card_detail(token, role),
+        load_currency_balances(),
+    )
+    view = build_account_detail_view(
+        detail,
+        uid=role.masked_uid if group else role.role_id,
+        nickname=role.nickname,
+        server_name=role.server_name or role.server_id,
+        currency_balances=currency_balances,
+    )
+    return await _finish_pngs(matcher, await draw_account_detail_cards(view))
 
 
 async def _handle_attendance(
@@ -610,7 +668,7 @@ def _attendance_view(role: EndfieldRole, result: AttendanceResult) -> Attendance
     )
 
 
-def _format_accounts(roles: list[EndfieldRole], *, reveal_uid: bool) -> str:
+def _format_accounts(roles: list[EndfieldRole], *, reveal_uid: bool, detail_hint: bool = False) -> str:
     if not roles:
         return "尚未绑定终末地账号。使用 /zmd 绑定 开始绑定。"
     lines = ["已绑定的终末地账号："]
@@ -618,6 +676,8 @@ def _format_accounts(roles: list[EndfieldRole], *, reveal_uid: bool) -> str:
         marker = " [主账号]" if role.is_primary else ""
         uid = role.role_id if reveal_uid else role.masked_uid
         lines.append(f"{index}. {role.nickname}{marker} · {role.server_name or role.server_id} · UID {uid}")
+    if detail_hint:
+        lines.append("回复编号查看该账号详情，或回复“取消”退出。")
     lines.append("可使用 /zmd 添加账号 继续绑定，或用 /zmd 主账号 <编号>、/zmd 解绑 <编号> 管理。")
     return "\n".join(lines)
 

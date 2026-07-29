@@ -244,7 +244,7 @@ def _parse_personal_command(parts: list[str]) -> ParsedEndfieldCommand | None:
     if head in BIND_ALIASES:
         return ParsedEndfieldCommand("bind")
     if head in ACCOUNT_ALIASES:
-        return ParsedEndfieldCommand("accounts")
+        return ParsedEndfieldCommand("accounts", account_selector=" ".join(parts[1:]).strip())
     if head in PRIMARY_ALIASES:
         selector = " ".join(parts[1:]).strip()
         return ParsedEndfieldCommand("primary", account_selector=selector, error="请指定账号编号" if not selector else "")
@@ -404,7 +404,8 @@ def format_help() -> str:
         [
             "终末地查询用法：",
             "  /zmd 绑定 | /zmd 添加账号（仅私聊，可重复追加多个账号）",
-            "  /zmd 账号 | /zmd 主账号 <编号> | /zmd 解绑 <编号>（仅私聊）",
+            "  /zmd 账号 [编号]（账号详情图：干员、装备、武器、技能等级、潜能）",
+            "  /zmd 主账号 <编号> | /zmd 解绑 <编号>（仅私聊）",
             "  /zmd 签到 [全部|编号|昵称|UID后四位]",
             "  /zmd 抽卡 [账号] | /zmd 抽卡同步 [账号] [--full]",
             "  /zmd 抽卡导入 [账号]（仅私聊，手机号验证码导入小黑盒历史统计）",

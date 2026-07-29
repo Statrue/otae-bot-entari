@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -23,6 +24,9 @@ AS_BASE = "https://as.hypergryph.com"
 SKLAND_BASE = "https://zonai.skland.com"
 BINDING_BASE = "https://binding-api-account-prod.hypergryph.com"
 GACHA_BASE = "https://ef-webview.hypergryph.com"
+CUSTOMER_SERVICE_BASE = "https://customer-service.hypergryph.com"
+CURRENCY_LOG_PATH = "/api/center/open/v1/endfield/game_logs/currency"
+CURRENCY_TYPES = (1, 2, 3)
 SKLAND_APP_CODE = "4ca99fa6b56cc2ba"
 GACHA_APP_CODE = "be36d44aa36bfb5b"
 CHARACTER_POOL_TYPES = (
@@ -160,6 +164,60 @@ class EndfieldOfficialClient:
                 )
             )
         return AttendanceResult("success", "签到成功", tuple(rewards))
+
+    async def card_detail(self, account_token: str, role: RoleCandidate | Any) -> dict[str, Any]:
+        context = await self._skland_context(account_token, refresh=True)
+        payload = await self._signed_skland_request(
+            context,
+            "GET",
+            "/api/v1/game/endfield/card/detail",
+            params={"roleId": str(role.role_id), "serverId": str(role.server_id)},
+        )
+        detail = (payload.get("data") or {}).get("detail")
+        if not isinstance(detail, dict) or not detail:
+            raise EndfieldAPIError("查询终末地档案", message="官方接口未返回角色档案")
+        return detail
+
+    async def currency_balances(self, account_token: str, role: RoleCandidate | Any) -> dict[int, int]:
+        role_token = await self.get_u8_token(account_token, str(role.binding_uid))
+        headers = {
+            "Accept": "application/json, text/plain, */*",
+            "Content-Type": "application/json",
+            "Origin": CUSTOMER_SERVICE_BASE,
+            "Referer": f"{CUSTOMER_SERVICE_BASE}/app/endfield/gamelogs/2",
+            "x-account-token": account_token,
+            "x-role-token": role_token,
+            "x-role-server-id": str(role.server_id),
+            "x-hg-language": "zh-cn",
+        }
+
+        async def fetch_balance(currency_type: int) -> int | None:
+            payload = await self._json_request(
+                "查询终末地货币",
+                "POST",
+                f"{CUSTOMER_SERVICE_BASE}{CURRENCY_LOG_PATH}",
+                headers=headers,
+                json_body={"limit": 1, "currencyType": currency_type, "changeType": 0},
+            )
+            items = (payload.get("data") or {}).get("list") or []
+            if not items or not isinstance(items[0], dict) or "after" not in items[0]:
+                return None
+            return _as_int(items[0].get("after"))
+
+        results = await asyncio.gather(
+            *(fetch_balance(currency_type) for currency_type in CURRENCY_TYPES),
+            return_exceptions=True,
+        )
+        balances: dict[int, int] = {}
+        errors: list[Exception] = []
+        for currency_type, result in zip(CURRENCY_TYPES, results, strict=True):
+            if isinstance(result, Exception):
+                errors.append(result)
+            elif result is not None:
+                balances[currency_type] = result
+        if not balances and errors:
+            raise errors[0]
+        return balances
 
     async def get_gacha_roles(self, account_token: str) -> list[RoleCandidate]:
         oauth_token = await self._oauth_token(account_token, GACHA_APP_CODE, grant_type=1)

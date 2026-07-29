@@ -643,7 +643,8 @@ class EndfieldCommandParserTests(unittest.TestCase):
 
         with Image.open(image_path) as image:
             self.assertEqual((image.size, image.mode), ((1075, 761), "RGBA"))
-        self.assertIn("/zmd 绑定 / 添加账号  可重复追加多个账号", spec)
+        self.assertIn("/zmd 绑定 / 添加账号  可重复追加多个账号（仅私聊）", spec)
+        self.assertIn("/zmd 账号 [编号]  账号详情图：干员配装总览", spec)
         self.assertIn("/zmd 抽卡同步 [账号] [--full]", spec)
         self.assertIn("/zmd 抽卡记录 [账号] [页码] [--池 名称]", spec)
         self.assertIn("/zmd 抽卡导入 [账号]（仅私聊）", spec)
@@ -656,7 +657,7 @@ class EndfieldCommandParserTests(unittest.TestCase):
     def test_gacha_import_is_private_only_before_phone_prompt(self):
         source = (ROOT / "plugins/endfield/__init__.py").read_text(encoding="utf-8")
 
-        self.assertIn('private_only = {"bind", "accounts", "primary", "unbind", "gacha_import"}', source)
+        self.assertIn('private_only = {"bind", "primary", "unbind", "gacha_import"}', source)
         self.assertIn("该命令涉及账号凭据或手机号，仅支持私聊使用。", source)
         self.assertLess(
             source.index("if command.action in private_only and is_group(event):"),

@@ -818,7 +818,7 @@ MEDAL_CARD_CSS = """
 .medal-meta .tag.up{background:#eef;border-color:#446}.medal-meta .tag.plate{background:#fee;border-color:#944}
 .medal-desc{margin-top:5px;color:#555;font-size:12px;line-height:1.4}
 .medal-source{display:flex;justify-content:space-between;gap:16px;margin-top:14px;padding-top:10px;border-top:2px solid #222;color:#777;font-size:12px;font-weight:800}
-.medal-levelbar{display:flex;gap:8px;margin-bottom:14px}.medal-levelbar .lv-cell{flex:1;padding:10px 12px;border:1px solid #999;background:#fff;text-align:center}.medal-levelbar .lv-cell span{display:block;color:#666;font-size:13px}.medal-levelbar .lv-cell strong{display:block;margin-top:3px;font-size:26px;line-height:1}
+.medal-levelbar{display:flex;gap:10px;margin-bottom:14px}.medal-levelbar .lv-cell{flex:1;display:flex;align-items:center;justify-content:center;gap:12px;padding:12px 14px;border:1px solid #999;background:#fff}.medal-levelbar .lv-cell strong{font-size:32px;line-height:1;font-weight:900;color:#222}.medal-levelbar .grade-icon{display:inline-block;width:48px;height:48px;flex-shrink:0}
 """
 
 
@@ -863,7 +863,7 @@ async def _draw_medal_stats_page(
         f"Lv{level}:{count}" for level, count in sorted(current.level_counts.items())
     )
     new_total = len(view.new_medals)
-    headline_state = ("首次快照" if not view.previous_version else f"相较 {view.previous_version}")
+    headline_state = ("暂无更早版本" if not view.previous_version else f"相较 {view.previous_version}")
     headline_state += f" · 新增 {new_total}"
     if page_count > 1:
         headline_state += f" · 第 {page_number}/{page_count} 页"
@@ -880,7 +880,7 @@ async def _draw_medal_stats_page(
     medal_html = (
         "".join(_medal_item_html(medal, icon_map) for medal in medals)
         if medals
-        else '<div class="empty">暂无新增蚀刻章（首次快照或本版本无新增）</div>'
+        else '<div class="empty">暂无新增蚀刻章（暂无更早版本可对比或本版本无新增）</div>'
     )
     body = f"""
     <header><div><small>ENDFIELD / MEDAL ARCHIVE</small><h1>蚀刻章统计</h1><p>{esc(headline_state)}</p></div></header>
@@ -891,7 +891,7 @@ async def _draw_medal_stats_page(
         <h2>新增蚀刻章（本页 {len(medals)}）</h2>
         <div class="medal-list">{medal_html}</div>
       </section>
-      <footer class="medal-source"><span>数据来源 FZ Wiki（跟进官方客户端修正）</span><span>版本 {esc(current.version)} · 共 {current.total_count} 枚</span></footer>
+      <footer class="medal-source"><span>数据来源 AKEData（游戏客户端 TableCfg）</span><span>版本 {esc(current.version)} · 共 {current.total_count} 枚</span></footer>
     </main>
     """
     return await _draw_neutral_card("medal-stats-card", body, extra_css=MEDAL_CARD_CSS)
@@ -960,11 +960,39 @@ async def draw_medal_missing_card(view: MedalMissingView) -> tuple[bytes, ...]:
     return (await _draw_neutral_card("medal-missing-card", body, extra_css=extra),)
 
 
+# 等级档位徽记：形状取自 FZ Wiki 侧边栏蚀刻章图标（assets/image/endfield/medal_grade.png，
+# 白色单色 + 透明背景），用 CSS mask 显示形状、background-color 按等级变色（1 深灰→2 银→3 金）。
+_MEDAL_GRADE_ICON_PATH = Path("assets/image/endfield/medal_grade.png")
+_MEDAL_GRADE_MASK_URL: str | None = None  # 懒加载（_local_image_data_url 定义在本文件后段）
+_MEDAL_GRADE_COLORS: dict[int, str] = {
+    1: "#6a6a6a",
+    2: "#aab0b8",
+    3: "#e3c14a",
+}
+
+
+def _medal_grade_icon(level: int) -> str:
+    """等级档位徽记：FZ Wiki 蚀刻章图标形状 + 等级色（CSS mask 改色）。"""
+    color = _MEDAL_GRADE_COLORS.get(level, "#888")
+    global _MEDAL_GRADE_MASK_URL
+    if _MEDAL_GRADE_MASK_URL is None:
+        _MEDAL_GRADE_MASK_URL = _local_image_data_url(_MEDAL_GRADE_ICON_PATH)
+    mask = _MEDAL_GRADE_MASK_URL
+    if not mask:
+        return f'<span class="grade-icon" role="img" aria-label="{level}级蚀刻章" style="background:{color}"></span>'
+    return (
+        f'<span class="grade-icon" role="img" aria-label="{level}级蚀刻章" '
+        f'style="background-color:{color};'
+        f"-webkit-mask:url('{mask}') center/contain no-repeat;"
+        f"mask:url('{mask}') center/contain no-repeat\"></span>"
+    )
+
+
 def _medal_level_bar(level_counts: dict[int, int]) -> str:
     if not level_counts:
         return ""
     cells = "".join(
-        f'<div class="lv-cell"><span>Lv{lv}</span><strong>{level_counts[lv]}</strong></div>'
+        f'<div class="lv-cell">{_medal_grade_icon(lv)}<strong>{level_counts[lv]}</strong></div>'
         for lv in sorted(level_counts, reverse=True)
     )
     return f'<section class="medal-levelbar">{cells}</section>'

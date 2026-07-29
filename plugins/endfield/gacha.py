@@ -142,6 +142,8 @@ class KeepsakeGift:
     gacha_ts: int
     pool_position: int
     icon_path: str = ""
+    gift_type: str = "信物"
+    claim_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -407,8 +409,11 @@ def build_gacha_analysis(
             has_previous_pool_six = True
         free_batches = _build_free_batches(free, metadata)
         keepsake_gifts = (
-            _build_keepsake_gifts(paid, pool_rule, metadata, keepsake_metadata)
-            if item_type == "角色" and not is_joint_pool else []
+            _build_keepsake_gifts(
+                paid, pool_rule, metadata, keepsake_metadata,
+                item_type=item_type,
+            )
+            if (item_type == "武器" or (item_type == "角色" and not is_joint_pool)) else []
         )
         for batch in free_batches:
             six_events.extend(batch.six_stars)
@@ -1062,11 +1067,24 @@ def _merge_xhh_keepsake_gifts(
     metadata: dict[str, GachaItemMetadata],
     keepsake_metadata: dict[str, GachaItemMetadata],
 ) -> tuple[KeepsakeGift, ...]:
-    if snapshot.item_type != "角色" or "joint" in snapshot.pool_type.casefold() or not rule or not rule.up_item_ids:
+    if (snapshot.item_type == "角色" and "joint" in snapshot.pool_type.casefold()) or not rule or not rule.up_item_ids:
         return existing
     gifts = {item.pool_position: item for item in existing}
     operator_id = rule.up_item_ids[0]
     operator_metadata = metadata.get(operator_id)
+    if snapshot.item_type == "武器":
+        gift_name = operator_metadata.name if operator_metadata and operator_metadata.name else "当期UP武器"
+        gift_id = operator_metadata.item_id if operator_metadata else operator_id
+        gift_icon = operator_metadata.icon_path if operator_metadata else ""
+        for claim_count in range(18, paid_total + 1, 16):
+            gifts.setdefault(
+                claim_count,
+                KeepsakeGift(
+                    gift_name, gift_id, snapshot.latest_ts, claim_count,
+                    gift_icon, "武器", claim_count,
+                ),
+            )
+        return tuple(sorted(gifts.values(), key=lambda item: item.pool_position, reverse=True))
     gift_metadata = keepsake_metadata.get(operator_id)
     gift_name = (
         gift_metadata.name if gift_metadata and gift_metadata.name
@@ -1280,11 +1298,33 @@ def _build_keepsake_gifts(
     rule: GachaPoolRule | None,
     metadata: dict[str, GachaItemMetadata],
     keepsake_metadata: dict[str, GachaItemMetadata],
+    *,
+    item_type: str = "角色",
 ) -> list[KeepsakeGift]:
     if not rule or not rule.up_item_ids:
         return []
     operator_id = rule.up_item_ids[0]
     operator_metadata = metadata.get(operator_id)
+    if item_type == "武器":
+        name = operator_metadata.name if operator_metadata and operator_metadata.name else "当期UP武器"
+        item_id = operator_metadata.item_id if operator_metadata else operator_id
+        icon_path = operator_metadata.icon_path if operator_metadata else ""
+        batches: dict[int, list[GachaRecord]] = defaultdict(list)
+        for record in records:
+            batches[record.gacha_ts].append(record)
+        ordered_batches = [batches[key] for key in sorted(batches)]
+        batch_end_positions: list[int] = []
+        running_position = 0
+        for batch in ordered_batches:
+            running_position += len(batch)
+            batch_end_positions.append(running_position)
+        return [
+            KeepsakeGift(
+                name, item_id, ordered_batches[claim_count - 1][-1].gacha_ts,
+                batch_end_positions[claim_count - 1], icon_path, "武器", claim_count,
+            )
+            for claim_count in range(18, len(ordered_batches) + 1, 16)
+        ]
     gift_metadata = keepsake_metadata.get(operator_id)
     name = (
         gift_metadata.name if gift_metadata and gift_metadata.name

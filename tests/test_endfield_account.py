@@ -1392,6 +1392,32 @@ class EndfieldGachaServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(gift_html.index("六星300"), gift_html.index("当期UP的信物"))
         self.assertLess(gift_html.index("当期UP的信物"), gift_html.index("六星200"))
 
+    def test_analysis_adds_weapon_gift_marker_at_18th_claim(self):
+        records = [
+            store_module.GachaRecord(
+                "role", "server", "weapon", "武器池", "weapon", str(index), (index - 1) // 10 + 1,
+                f"item-{index}", "结果", 4, "武器",
+            )
+            for index in range(1, 181)
+        ]
+        rules = {"weapon": gacha_assets_module.GachaPoolRule("weapon", ("wpn-up",), 80)}
+        metadata = {
+            "wpn-up": gacha_assets_module.GachaItemMetadata(
+                "wpn-up", "赠送武器", 6, "武器", icon_path="C:/cache/gift-weapon.png",
+            ),
+        }
+
+        pool = gacha_module.build_gacha_analysis(
+            self.role, records, [], metadata, rules,
+        ).pools[0]
+
+        self.assertEqual(len(pool.keepsake_gifts), 1)
+        self.assertEqual(pool.keepsake_gifts[0].gift_type, "武器")
+        self.assertEqual(pool.keepsake_gifts[0].name, "赠送武器")
+        gift_html = draw_module._draw_gacha_pool(pool)
+        self.assertIn("第18次申领赠送武器", gift_html)
+        self.assertIn("赠送武器", gift_html)
+
     def test_analysis_orders_pools_by_latest_record(self):
         records = [
             store_module.GachaRecord("role", "server", "older", "旧池", "x", "1", 10, "a", "甲", 6, "角色"),

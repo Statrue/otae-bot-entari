@@ -654,12 +654,15 @@ def _pool_paid_total(pool: PoolAnalysis) -> int:
 
 def _draw_keepsake_gift_row(item) -> str:
     icon_url = _local_image_data_url(Path(item.icon_path)) if item.icon_path else ""
-    icon = f'<img src="{esc_attr(icon_url)}" alt="{esc_attr(item.name)}">' if icon_url else '<span>信物</span>'
+    gift_type = getattr(item, "gift_type", "信物")
+    claim_count = getattr(item, "claim_count", 0)
+    position_text = f"第{claim_count}次申领" if claim_count else f"第{item.pool_position}抽"
+    icon = f'<img src="{esc_attr(icon_url)}" alt="{esc_attr(item.name)}">' if icon_url else f'<span>{esc(gift_type)}</span>'
     return (
         f'<div class="pull-row"><div class="gacha-thumb">{icon}</div>'
-        f'<div class="pull-copy"><strong>{esc(item.name)}</strong><time>第{item.pool_position}抽赠送信物</time></div>'
+        f'<div class="pull-copy"><strong>{esc(item.name)}</strong><time>{esc(position_text)}赠送{esc(gift_type)}</time></div>'
         f'<div class="bar-track"><div class="bar-fill" style="width:100.0%"></div>'
-        f'<div class="bar-value"><b>第{item.pool_position}抽</b>'
+        f'<div class="bar-value"><b>{esc(position_text)}</b>'
         f'<div class="pity-hits"><span class="pity-hit">赠送</span></div></div></div></div>'
     )
 

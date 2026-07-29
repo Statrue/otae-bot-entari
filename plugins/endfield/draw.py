@@ -891,7 +891,7 @@ async def _draw_medal_stats_page(
         <h2>新增蚀刻章（本页 {len(medals)}）</h2>
         <div class="medal-list">{medal_html}</div>
       </section>
-      <footer class="medal-source"><span>数据来源 AKEData（游戏客户端 TableCfg）</span><span>版本 {esc(current.version)} · 共 {current.total_count} 枚</span></footer>
+      <footer class="medal-source"><span>数据来源 AKEData</span><span>版本 {esc(current.version)} · 共 {current.total_count} 枚</span></footer>
     </main>
     """
     return await _draw_neutral_card("medal-stats-card", body, extra_css=MEDAL_CARD_CSS)
@@ -950,7 +950,7 @@ async def draw_medal_missing_card(view: MedalMissingView) -> tuple[bytes, ...]:
       {_medal_level_bar(view.level_counts)}
       {notice}
       {''.join(sections)}
-      <footer class="medal-source"><span>进度：森空岛 SDK · 元数据：FZ Wiki</span><span>快照版本 {esc(view.snapshot_version)} · 已展示 {view.shown_count}</span></footer>
+      <footer class="medal-source"><span>进度：森空岛 SDK · 元数据：AKEData</span><span>快照版本 {esc(view.snapshot_version)} · 已展示 {view.shown_count}</span></footer>
     </main>
     """
     extra = MEDAL_CARD_CSS + (

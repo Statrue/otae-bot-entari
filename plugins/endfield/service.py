@@ -504,6 +504,11 @@ class EndfieldService:
         not_obtained: list[MedalItemView] = []
         not_maxed: list[MedalItemView] = []
         not_plated: list[MedalItemView] = []
+        # 等级分布按账号已拥有奖章的「当前档位（颜色）」统计。
+        # 森空岛 level 对 initLevel>1 的章有偏移（如「谷地调查者奖章」initLevel=2：银记 1、金记 2），
+        # 实际档位 = skland level + initLevel - 1；否则会把 2→3 升级章误判。
+        # 详见 docs/bugfix_medal_investigator_max_tier.md。AKEData max_level 本身正确。
+        owned_level_counts: dict[int, int] = {}
         for medal in snapshot.medals:
             achv_id = medal.medal_id or ""
             info = (
@@ -516,7 +521,10 @@ class EndfieldService:
             if info is None:
                 not_obtained.append(medal)
                 continue
-            if medal.can_be_upgraded and info.level < medal.max_level:
+            offset = info.init_level - 1 if info.init_level > 0 else 0
+            real_level = info.level + offset
+            owned_level_counts[real_level] = owned_level_counts.get(real_level, 0) + 1
+            if medal.can_be_upgraded and real_level < medal.max_level:
                 not_maxed.append(medal)
             if medal.can_be_plated and not info.plated:
                 not_plated.append(medal)
@@ -540,7 +548,7 @@ class EndfieldService:
             not_plated=not_plated,
             truncated=truncated,
             shown_count=len(not_obtained) + len(not_maxed) + len(not_plated),
-            level_counts=dict(snapshot.level_counts),
+            level_counts=owned_level_counts,
         )
 
     async def find_weapon_operator_names(self, view: WeaponView) -> list[str]:
@@ -2457,10 +2465,12 @@ def _parse_player_medal_progress(
         plated = plated_raw is True or (
             isinstance(plated_raw, str) and plated_raw.strip().lower() in ("true", "1", "yes")
         )
+        init_level = _to_int(meta.get("initLevel")) or 0
         view = MedalProgressView(
             medal_id=hex_id,
             level=_to_int(item.get("level")),
             plated=plated,
+            init_level=init_level,
         )
         if hex_id:
             by_hex[hex_id] = view

@@ -433,6 +433,7 @@ class MedalProgressView:
     medal_id: str = ""
     level: int = 0
     plated: bool = False
+    init_level: int = 0       # achievementData.initLevel：用于校正森空岛 level 偏移（initLevel>1 时）
 
 
 @dataclass(slots=True)

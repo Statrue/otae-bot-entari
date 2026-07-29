@@ -157,6 +157,36 @@ class MedalMissingTest(unittest.TestCase):
         self.assertEqual([m.medal_id for m in view.not_plated], ["achv_c"])
         self.assertEqual(view.owned_count, 3)
         self.assertFalse(view.truncated)
+        # 等级分布按账号已拥有奖章的「当前档位」(real_level = skland level + initLevel - 1) 统计。
+        # 本例三枚均 level=1、无 initLevel → real=1；d 未获得不计。
+        self.assertEqual(view.level_counts, {1: 3})
+
+    def test_init_level_offset_for_2_to_3_medal(self):
+        """森空岛 level 对 initLevel>1 的章有偏移：实际档位 = skland level + initLevel - 1。
+
+        复现「谷地调查者奖章」（全游戏唯一 2→3 升级章，initLevel=2）：AKEData max_level=3 正确；
+        但森空岛把银(实际2)记为 level=1、金(实际3)记为 level=2。玩家拿到金色(level=2)时
+        real_level=2+2-1=3=max → 已升满，不该进未升满，且按 3 档（金）计数。
+        对照「潜能解放奖章」（initLevel=1、1→2→3）：level=2 → real=2<3 → 真未升满、按 2 档计数。
+        """
+        service = EndfieldService.__new__(EndfieldService)
+        snapshot = self._snapshot([
+            MedalItemView(medal_id="achv_g", name="G", max_level=3, can_be_upgraded=True),  # 谷地调查者型
+            MedalItemView(medal_id="achv_h", name="H", max_level=3, can_be_upgraded=True),  # 潜能解放型
+        ])
+        raw_progress = {"data": {"detail": {"achieve": {"achieveMedals": [
+            {"achievementData": {"id": hashlib.md5(b"achv_g").hexdigest(), "name": "G", "initLevel": 2},
+                             "level": 2, "isPlated": False},
+            {"achievementData": {"id": hashlib.md5(b"achv_h").hexdigest(), "name": "H", "initLevel": 1},
+                             "level": 2, "isPlated": False},
+        ]}}}}
+        view = service.build_medal_missing_view(
+            raw_progress, snapshot, nickname="t", uid="u", server_name="s"
+        )
+        # G: real=2+2-1=3=max → 已升满；只有 H（real=2<3）未升满
+        self.assertEqual([m.medal_id for m in view.not_maxed], ["achv_h"])
+        # 当前档位：G→3 档（金）、H→2 档（银）
+        self.assertEqual(view.level_counts, {3: 1, 2: 1})
 
     def test_md5_id_resolves_name_collision(self):
         """武陵·Ⅳ/·Ⅴ 命名撞名：森空岛两枚同名(hex 不同)，md5-id 能精确归属。"""

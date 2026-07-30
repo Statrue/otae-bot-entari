@@ -231,11 +231,15 @@ async def draw_attendance_card(view: AttendanceCardView) -> bytes:
     rows = []
     for role in view.roles:
         rewards = "、".join(f"{esc(item.name)} × {item.count}" for item in role.rewards) or "无奖励明细"
+        monthly_count = (
+            f'<div class="attendance-meta"><span>当月累签</span><b>{role.monthly_count} 天</b></div>'
+            if role.monthly_count is not None else ""
+        )
         rows.append(
             f"""
             <section class="attendance-row status-{esc(role.status)}">
               <div class="role-main"><strong>{esc(role.nickname)}</strong><span>{esc(role.server_name or '默认服务器')} · {esc(role.uid)}</span></div>
-              <div class="status"><b>{esc(role.message)}</b><span>{rewards}</span></div>
+              <div class="status"><div class="status-copy"><b>{esc(role.message)}</b><span>{rewards}</span></div>{monthly_count}</div>
             </section>
             """
         )
@@ -249,9 +253,9 @@ async def draw_attendance_card(view: AttendanceCardView) -> bytes:
         .attendance-list{display:grid;gap:12px}
         .attendance-row{display:grid;grid-template-columns:minmax(260px,.8fr) minmax(420px,1.2fr);min-height:102px;border:1px solid #8d8d8d;border-left:8px solid #222;background:#fff}
         .attendance-row.status-failed{border-left-width:3px;background:#ededed}
-        .role-main,.status{display:flex;flex-direction:column;justify-content:center;padding:18px 22px}
-        .role-main{border-right:1px solid #b8b8b8}.role-main strong{font-size:28px}.role-main span,.status span{margin-top:7px;color:#666;font-size:16px}
-        .status b{font-size:22px}.status span{line-height:1.45}
+        .role-main,.status{padding:18px 22px}.role-main{display:flex;flex-direction:column;justify-content:center;border-right:1px solid #b8b8b8}.role-main strong{font-size:28px}
+        .status{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:20px}.status-copy{display:flex;min-width:0;flex-direction:column;justify-content:center}.status-copy>b{font-size:22px}.role-main span,.status-copy>span{margin-top:7px;color:#666;font-size:16px;line-height:1.45}
+        .attendance-meta{min-width:118px;padding:10px 14px;border-left:4px solid #222;background:#ededed}.attendance-meta span,.attendance-meta b{display:block;margin:0}.attendance-meta span{color:#666;font-size:13px;font-weight:800}.attendance-meta b{margin-top:4px;font-size:22px;white-space:nowrap}
         """,
     )
 

@@ -57,6 +57,7 @@ class AttendanceResult:
     status: str
     message: str
     rewards: tuple[AttendanceReward, ...] = ()
+    monthly_count: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,34 +137,55 @@ class EndfieldOfficialClient:
     async def attendance(self, account_token: str, role: RoleCandidate | Any) -> AttendanceResult:
         context = await self._skland_context(account_token, refresh=True)
         headers = {"sk-game-role": f"3_{role.role_id}_{role.server_id}"}
+        status = "success"
+        message = "签到成功"
+        rewards: list[AttendanceReward] = []
         try:
             payload = await self._signed_skland_request(
                 context, "POST", "/web/v1/game/endfield/attendance", raw_body="", extra_headers=headers
             )
         except EndfieldAPIError as exc:
             if exc.code in {"10001", "10002", "10012", "10013"} or "已签到" in str(exc):
-                return AttendanceResult("already", "今日已签到")
-            raise
-        data = payload.get("data") or {}
-        resource_map = data.get("resourceInfoMap") or {}
-        rewards: list[AttendanceReward] = []
-        for award in data.get("awardIds") or []:
-            award_details = award if isinstance(award, dict) else {}
-            award_id = award_details.get("id") or award_details.get("itemId") or award_details.get("resourceId") or award
-            item = resource_map.get(str(award_id)) or {}
-            rewards.append(
-                AttendanceReward(
-                    str(item.get("name") or item.get("itemName") or award_details.get("name") or award_id),
-                    _as_int(
-                        item.get("count")
-                        or item.get("quantity")
-                        or award_details.get("count")
-                        or award_details.get("quantity")
-                        or 1
-                    ),
+                status = "already"
+                message = "今日已签到"
+            else:
+                raise
+        else:
+            data = payload.get("data") or {}
+            resource_map = data.get("resourceInfoMap") or {}
+            for award in data.get("awardIds") or []:
+                award_details = award if isinstance(award, dict) else {}
+                award_id = award_details.get("id") or award_details.get("itemId") or award_details.get("resourceId") or award
+                item = resource_map.get(str(award_id)) or {}
+                rewards.append(
+                    AttendanceReward(
+                        str(item.get("name") or item.get("itemName") or award_details.get("name") or award_id),
+                        _as_int(
+                            item.get("count")
+                            or item.get("quantity")
+                            or award_details.get("count")
+                            or award_details.get("quantity")
+                            or 1
+                        ),
+                    )
                 )
+
+        monthly_count: int | None = None
+        try:
+            calendar_payload = await self._signed_skland_request(
+                context, "GET", "/web/v1/game/endfield/attendance", extra_headers=headers
             )
-        return AttendanceResult("success", "签到成功", tuple(rewards))
+        except EndfieldAPIError:
+            pass
+        else:
+            calendar_data = calendar_payload.get("data") or {}
+            calendar = calendar_data.get("calendar") if isinstance(calendar_data, dict) else None
+            if isinstance(calendar, list):
+                monthly_count = sum(
+                    1 for item in calendar
+                    if isinstance(item, dict) and bool(item.get("done"))
+                )
+        return AttendanceResult(status, message, tuple(rewards), monthly_count)
 
     async def card_detail(self, account_token: str, role: RoleCandidate | Any) -> dict[str, Any]:
         context = await self._skland_context(account_token, refresh=True)

@@ -665,6 +665,7 @@ def _attendance_view(role: EndfieldRole, result: AttendanceResult) -> Attendance
         status=result.status,
         message=result.message,
         rewards=[AttendanceRewardView(item.name, item.count) for item in result.rewards],
+        monthly_count=result.monthly_count,
     )
 
 

@@ -840,9 +840,59 @@ class EndfieldOfficialClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.rewards, (client_module.AttendanceReward("奖励", 2),))
 
+    async def test_attendance_counts_completed_days_from_month_calendar(self):
+        client = client_module.EndfieldOfficialClient(mock.AsyncMock())
+        client._skland_context = mock.AsyncMock(return_value=object())
+        client._signed_skland_request = mock.AsyncMock(side_effect=[
+            {"code": 0, "data": {"awardIds": []}},
+            {
+                "code": 0,
+                "data": {
+                    "calendar": [
+                        {"awardId": "day-1", "done": True},
+                        {"awardId": "day-2", "done": False},
+                        {"awardId": "day-3", "done": True},
+                    ],
+                },
+            },
+        ])
+        role = mock.Mock(role_id="role", server_id="1")
+
+        result = await client.attendance("account-token", role)
+
+        self.assertEqual(result.monthly_count, 2)
+        self.assertEqual(
+            [call.args[1] for call in client._signed_skland_request.await_args_list],
+            ["POST", "GET"],
+        )
+
+    async def test_attendance_keeps_success_when_month_calendar_fails(self):
+        client = client_module.EndfieldOfficialClient(mock.AsyncMock())
+        client._skland_context = mock.AsyncMock(return_value=object())
+        client._signed_skland_request = mock.AsyncMock(side_effect=[
+            {"code": 0, "data": {"awardIds": []}},
+            client_module.EndfieldAPIError("森空岛请求", message="网络请求失败"),
+        ])
+        role = mock.Mock(role_id="role", server_id="1")
+
+        result = await client.attendance("account-token", role)
+
+        self.assertEqual(result.status, "success")
+        self.assertIsNone(result.monthly_count)
+
     async def test_attendance_treats_http_403_business_code_as_already_signed(self):
         async def handler(request: httpx.Request):
-            return httpx.Response(403, json={"code": 10001, "message": "already signed"})
+            if request.method == "POST":
+                return httpx.Response(403, json={"code": 10001, "message": "already signed"})
+            return httpx.Response(200, json={
+                "code": 0,
+                "data": {
+                    "calendar": [
+                        {"awardId": "day-1", "done": True},
+                        {"awardId": "day-2", "done": True},
+                    ],
+                },
+            })
 
         http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         client = client_module.EndfieldOfficialClient(http)
@@ -856,6 +906,7 @@ class EndfieldOfficialClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.status, "already")
         self.assertEqual(result.rewards, ())
+        self.assertEqual(result.monthly_count, 2)
         await http.aclose()
 
     async def test_signed_empty_post_matches_documented_algorithm(self):
@@ -2537,6 +2588,36 @@ class EndfieldNeutralCardTests(unittest.IsolatedAsyncioTestCase):
         extrema = image.getextrema()
         self.assertEqual(extrema[0], extrema[1])
         self.assertEqual(extrema[1], extrema[2])
+
+    async def test_attendance_card_shows_monthly_count_when_available(self):
+        view = models_module.AttendanceCardView(
+            roles=[
+                models_module.AttendanceRoleView(
+                    nickname="测试角色",
+                    uid="****1234",
+                    server_name="测试服务器",
+                    status="success",
+                    message="签到成功",
+                    monthly_count=12,
+                ),
+                models_module.AttendanceRoleView(
+                    nickname="失败角色",
+                    uid="****5678",
+                    server_name="测试服务器",
+                    status="failed",
+                    message="签到失败",
+                ),
+            ],
+        )
+        renderer = mock.AsyncMock(return_value=b"png")
+
+        with mock.patch.object(draw_module, "_draw_neutral_card", renderer):
+            await draw_module.draw_attendance_card(view)
+
+        body = renderer.await_args.args[1]
+        self.assertEqual(body.count("当月累签"), 1)
+        self.assertIn("12 天", body)
+        self.assertNotIn("None 天", body)
 
     async def test_attendance_and_analysis_cards_are_grayscale(self):
         attendance = models_module.AttendanceCardView(

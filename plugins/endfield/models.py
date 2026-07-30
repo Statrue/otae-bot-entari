@@ -341,6 +341,7 @@ class AttendanceRoleView:
     status: str
     message: str
     rewards: list[AttendanceRewardView] = field(default_factory=list)
+    monthly_count: int | None = None
 
 
 @dataclass(slots=True)

@@ -7,7 +7,7 @@ from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Iterable
 
 from .account_client import CHARACTER_POOL_TYPES, EndfieldAPIError, EndfieldOfficialClient
 from .account_crypto import CredentialCipher
@@ -634,6 +634,9 @@ def _merge_xhh_pools(
         keepsake_gifts = _merge_xhh_keepsake_gifts(
             existing.keepsake_gifts if existing else (), snapshot, paid_total, rule,
             metadata, keepsake_metadata,
+            xhh_metadata=xhh_metadata,
+            xhh_events=six_by_pool.get(snapshot.pool_id, ()),
+            pool_banners=pool_banners.get(snapshot.pool_id, ()),
         )
         merged = PoolAnalysis(
             pool_id=snapshot.pool_id,
@@ -1066,21 +1069,55 @@ def _merge_xhh_keepsake_gifts(
     rule: GachaPoolRule | None,
     metadata: dict[str, GachaItemMetadata],
     keepsake_metadata: dict[str, GachaItemMetadata],
+    *,
+    xhh_metadata: dict[str, GachaItemMetadata] | None = None,
+    xhh_events: Iterable[XhhSixStar] = (),
+    pool_banners: tuple[GachaPoolBanner, ...] = (),
 ) -> tuple[KeepsakeGift, ...]:
     if (snapshot.item_type == "角色" and "joint" in snapshot.pool_type.casefold()) or not rule or not rule.up_item_ids:
         return existing
     gifts = {item.pool_position: item for item in existing}
     operator_id = rule.up_item_ids[0]
     operator_metadata = metadata.get(operator_id)
+    xhh_metadata = xhh_metadata or {}
+    if operator_metadata is None:
+        operator_metadata = next(
+            (item for item in xhh_metadata.values() if item.item_id == operator_id),
+            None,
+        )
+    if operator_metadata is None:
+        operator_metadata = next(
+            (
+                xhh_metadata.get(_normalized_item_name(item.item_name))
+                or GachaItemMetadata(item.item_id, item.item_name, 6, snapshot.item_type)
+                for item in xhh_events
+                if not item.is_free and not item.miss_up and item.item_name
+            ),
+            None,
+        )
+    if operator_metadata is None:
+        operator_metadata = next(
+            (
+                GachaItemMetadata(
+                    item.item_id, item.name, 6, item.item_type,
+                    icon_path=item.image_path,
+                )
+                for item in pool_banners
+                if item.item_type == snapshot.item_type and item.name
+            ),
+            None,
+        )
     if snapshot.item_type == "武器":
         gift_name = operator_metadata.name if operator_metadata and operator_metadata.name else "当期UP武器"
         gift_id = operator_metadata.item_id if operator_metadata else operator_id
         gift_icon = operator_metadata.icon_path if operator_metadata else ""
-        for claim_count in range(18, paid_total + 1, 16):
+        claim_count_limit = paid_total // 10
+        for claim_count in range(18, claim_count_limit + 1, 16):
+            pool_position = claim_count * 10
             gifts.setdefault(
-                claim_count,
+                pool_position,
                 KeepsakeGift(
-                    gift_name, gift_id, snapshot.latest_ts, claim_count,
+                    gift_name, gift_id, snapshot.latest_ts, pool_position,
                     gift_icon, "武器", claim_count,
                 ),
             )

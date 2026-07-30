@@ -1765,6 +1765,49 @@ class EndfieldGachaServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("第18次申领赠送武器", gift_html)
         self.assertIn("赠送武器", gift_html)
 
+    def test_xhh_weapon_gifts_use_ten_pull_claim_positions_and_real_up_name(self):
+        imported = store_module.XhhGachaImport(
+            source_uid="role", nickname="tester", total_count=280, imported_at=456,
+            pools=(store_module.XhhGachaPool(
+                "weapon", "武器池", "weapon", "武器", 280,
+            ),),
+            six_stars=(store_module.XhhSixStar(
+                "weapon", "up", "UP Weapon", "武器", 100, 20, 20,
+            ),),
+        )
+        metadata = {
+            "upweapon": gacha_assets_module.GachaItemMetadata(
+                "actual-up", "UP Weapon", 6, "武器",
+            ),
+        }
+        rules = {
+            "weapon": gacha_assets_module.GachaPoolRule(
+                "weapon", ("rule-up",), 80, pool_kind="weapon",
+            ),
+        }
+
+        pool = gacha_module.build_gacha_analysis(
+            self.role, [], [], pool_rules=rules,
+            xhh_import=imported, xhh_metadata=metadata,
+        ).pools[0]
+
+        self.assertEqual(
+            [(gift.name, gift.item_id, gift.pool_position, gift.claim_count)
+             for gift in pool.keepsake_gifts],
+            [("UP Weapon", "actual-up", 180, 18)],
+        )
+
+        short_import = replace(
+            imported,
+            total_count=80,
+            pools=(replace(imported.pools[0], total_count=80),),
+        )
+        short_pool = gacha_module.build_gacha_analysis(
+            self.role, [], [], pool_rules=rules,
+            xhh_import=short_import, xhh_metadata=metadata,
+        ).pools[0]
+        self.assertEqual(short_pool.keepsake_gifts, ())
+
     def test_analysis_orders_pools_by_latest_record(self):
         records = [
             store_module.GachaRecord("role", "server", "older", "旧池", "x", "1", 10, "a", "甲", 6, "角色"),

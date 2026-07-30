@@ -3366,11 +3366,10 @@ class EndfieldServiceTests(unittest.TestCase):
         self.assertNotIn("max-height: calc(100% - 56px)", html)
         self.assertNotIn("min-height: 244px", html)
 
-    def test_rich_colors_meet_card_contrast_requirement(self):
-        normalized = draw.normalize_rich_color("#9eb7ff")
-        red, green, blue = (int(normalized[index:index + 2], 16) / 255 for index in (1, 3, 5))
-        background = (247 / 255, 248 / 255, 246 / 255)
-        self.assertGreaterEqual(draw._contrast_ratio((red, green, blue), background), 4.49)
+    def test_rich_colors_preserve_source_values(self):
+        self.assertEqual(draw.normalize_rich_color("#9eb7ff"), "#9eb7ff")
+        self.assertEqual(draw.normalize_rich_color("FFCC00"), "#ffcc00")
+        self.assertEqual(draw.normalize_rich_color("currentColor"), "currentColor")
 
     def test_metric_label_width_uses_three_display_width_buckets(self):
         short = models.SkillView("short", "短", levels=[models.SkillLevelView("Lv1", 1, {"倍率": "1"})])

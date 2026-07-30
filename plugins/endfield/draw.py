@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import colorsys
 import html
 import hashlib
 import mimetypes
@@ -2893,44 +2892,12 @@ def merged_term_styles(view: OperatorView) -> dict[str, TermStyleView]:
     }
 
 
-def normalize_rich_color(color: object, *, minimum_contrast: float = 4.5) -> str:
+def normalize_rich_color(color: object) -> str:
     text = str(color or "").strip()
     match = re.fullmatch(r"#?([0-9a-fA-F]{6})", text)
     if not match:
         return text
-    raw = match.group(1)
-    red, green, blue = (int(raw[index:index + 2], 16) / 255.0 for index in (0, 2, 4))
-    background = (247 / 255.0, 248 / 255.0, 246 / 255.0)
-    if _contrast_ratio((red, green, blue), background) >= minimum_contrast:
-        return f"#{raw.lower()}"
-    hue, lightness, saturation = colorsys.rgb_to_hls(red, green, blue)
-    low, high = 0.0, lightness
-    best = (red, green, blue)
-    for _ in range(20):
-        candidate_lightness = (low + high) / 2
-        candidate = colorsys.hls_to_rgb(hue, candidate_lightness, saturation)
-        if _contrast_ratio(candidate, background) >= minimum_contrast:
-            best = candidate
-            low = candidate_lightness
-        else:
-            high = candidate_lightness
-    return "#" + "".join(f"{round(channel * 255):02x}" for channel in best)
-
-
-def _contrast_ratio(first: tuple[float, float, float], second: tuple[float, float, float]) -> float:
-    first_luminance = _relative_luminance(first)
-    second_luminance = _relative_luminance(second)
-    lighter = max(first_luminance, second_luminance)
-    darker = min(first_luminance, second_luminance)
-    return (lighter + 0.05) / (darker + 0.05)
-
-
-def _relative_luminance(color: tuple[float, float, float]) -> float:
-    def channel(value: float) -> float:
-        return value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
-
-    red, green, blue = (channel(value) for value in color)
-    return red * 0.2126 + green * 0.7152 + blue * 0.0722
+    return f"#{match.group(1).lower()}"
 
 
 def operator_keyword_terms(view: OperatorView) -> set[str]:

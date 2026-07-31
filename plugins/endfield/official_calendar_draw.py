@@ -18,6 +18,7 @@ from .official_calendar import OfficialCalendarDiscoveryError, OfficialVersionCa
 CALENDAR_WIDTH = 1080
 FOOTER_HEIGHT = 30
 MAX_CALENDAR_HEIGHT = 4096
+TIMELINE_OFFSET_X = -4
 
 
 async def draw_official_version_calendar(calendar: OfficialVersionCalendar) -> bytes:
@@ -104,6 +105,9 @@ html, body {{ margin: 0; padding: 0; background: #050505; }}
 }}
 .calendar-content {{
   margin-left: auto;
+}}
+.calendar-timeline {{
+  transform: translateX({TIMELINE_OFFSET_X}px);
 }}
 .official-footer {{
   position: relative;

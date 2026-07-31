@@ -801,6 +801,7 @@ class EndfieldCommandParserTests(unittest.TestCase):
         self.assertIn("calendar-content", rendered_html)
         self.assertIn('width="1040" height="1342"', rendered_html)
         self.assertIn("margin-left: auto", rendered_html)
+        self.assertIn("transform: translateX(-4px)", rendered_html)
         self.assertNotIn("PIL", rendered_html)
 
     def test_plugin_prefers_official_calendar_and_keeps_akedata_fallback(self):

@@ -41,6 +41,25 @@ def _load_endfield_module(module_name: str):
         return _load_module(f"{pkg_name}.draw", "plugins/endfield/draw.py")
     if module_name == "service":
         return _load_module(f"{pkg_name}.service", "plugins/endfield/service.py")
+    if module_name == "version_calendar":
+        return _load_module(f"{pkg_name}.version_calendar", "plugins/endfield/version_calendar.py")
+    if module_name == "version_calendar_draw":
+        _load_endfield_module("version_calendar")
+        return _load_module(
+            f"{pkg_name}.version_calendar_draw",
+            "plugins/endfield/version_calendar_draw.py",
+        )
+    if module_name == "official_calendar":
+        return _load_module(
+            f"{pkg_name}.official_calendar",
+            "plugins/endfield/official_calendar.py",
+        )
+    if module_name == "official_calendar_draw":
+        _load_endfield_module("official_calendar")
+        return _load_module(
+            f"{pkg_name}.official_calendar_draw",
+            "plugins/endfield/official_calendar_draw.py",
+        )
     raise ValueError(module_name)
 
 
@@ -96,6 +115,11 @@ class EndfieldCommandParserTests(unittest.TestCase):
     def test_root_aliases_include_zmd(self):
         self.assertIn("zmd", commands.ROOT_ALIASES)
         self.assertIn("终末地", commands.ROOT_ALIASES)
+
+    def test_parse_version_calendar_command(self):
+        for command in ("版本日历", "日历", "calendar", "schedule"):
+            with self.subTest(command=command):
+                self.assertEqual(commands.parse_command(command).action, "calendar")
 
     def test_parse_loadout_command_keeps_operator_first_and_gear_in_any_order(self):
         parsed = commands.parse_command(
@@ -628,6 +652,162 @@ class EndfieldCommandParserTests(unittest.TestCase):
 
         self.assertIn("角色潜能2 武器潜能3", text)
         self.assertIn("武器技能1等级5", text)
+        self.assertIn("/zmd 版本日历", text)
+
+    def test_current_version_calendar_manifest_is_data_driven_and_complete(self):
+        calendar_module = _load_endfield_module("version_calendar")
+        calendar_draw = _load_endfield_module("version_calendar_draw")
+
+        calendar = calendar_module.load_calendar_manifest()
+        self.assertEqual((calendar.version, calendar.title), ("1.4", "向渊行"))
+        self.assertEqual(
+            {entry.section for entry in calendar.entries},
+            {"gacha", "claim", "region", "event", "gameplay"},
+        )
+        self.assertEqual(len(calendar.entries), 29)
+        self.assertIn("临渊望北", {entry.title for entry in calendar.entries})
+        self.assertIn("六方巧境", {entry.title for entry in calendar.entries})
+        self.assertFalse(hasattr(calendar, "image_path"))
+        self.assertEqual(
+            calendar_draw.HEADER_HEIGHT
+            + calendar_draw.AXIS_HEIGHT
+            + sum(
+                section.rows * section.row_height + calendar_draw.SECTION_GAP
+                for section in calendar.sections
+            )
+            + calendar_draw.FOOTER_HEIGHT,
+            calendar_draw.CALENDAR_HEIGHT,
+        )
+
+        rendered_html = calendar_draw.render_version_calendar_html(calendar)
+        self.assertIn('class="version-calendar"', rendered_html)
+        self.assertIn('data-section="gacha"', rendered_html)
+        self.assertIn('data-source-id="special_1_4_1"', rendered_html)
+        self.assertIn(">08.09</b>", rendered_html)
+
+    def test_version_calendar_hydrates_times_names_and_assets_from_akedata(self):
+        calendar_module = _load_endfield_module("version_calendar")
+        calendar = calendar_module.load_calendar_manifest()
+        version = calendar_module.AkeDataVersion("1.4-test", "public/test/TableCfg", "")
+        activities = {
+            "activity_char_trial_v1d4_1": {
+                "name": {"id": "activity-name"},
+                "timeId": "trial-time",
+                "tabImg": "activity_tab_character_trial_lizhiyan",
+            },
+        }
+        times = {
+            "trial-time": {
+                "timeRangeList": [
+                    {
+                        "openTime": "2026/07/17 12:00:00",
+                        "closeTime": "2026/08/08 04:00:00",
+                    }
+                ]
+            },
+            "pool-time": {
+                "timeRangeList": [
+                    {
+                        "openTime": "2026/07/18 12:00:00",
+                        "closeTime": "2026/08/07 04:00:00",
+                    }
+                ]
+            },
+        }
+        char_pools = {
+            "special_1_4_1": {
+                "name": {"id": "pool-name"},
+                "upCharIds": ["chr_0032_lizhiyan"],
+            }
+        }
+        texts = {
+            "activity-name": "作战演练",
+            "pool-name": "Ake 卡池名",
+        }
+
+        hydrated = calendar_module.hydrate_calendar_from_akedata(
+            calendar,
+            version,
+            activities,
+            times,
+            char_pools,
+            {},
+            texts,
+        )
+        trial = next(
+            entry
+            for entry in hydrated.entries
+            if entry.source_id == "activity_char_trial_v1d4_1"
+        )
+        pool = next(entry for entry in hydrated.entries if entry.source_id == "special_1_4_1")
+
+        self.assertEqual(hydrated.revision, "1.4-test")
+        self.assertEqual(trial.title, "诀")
+        self.assertEqual(trial.start_at, "2026-07-17T12:00:00+08:00")
+        self.assertIn("activity_tab_character_trial_lizhiyan.png", trial.art_url)
+        self.assertEqual(pool.title, "Ake 卡池名")
+        self.assertIn("icon_chr_0032_lizhiyan.png", pool.art_url)
+
+    def test_official_calendar_discovers_current_zh_cn_asset_mapping(self):
+        calendar_module = _load_endfield_module("official_calendar")
+        homepage = (
+            '<script src="/_next/static/chunks/app/other/layout-old.js"></script>'
+            '<script src="https://web.hycdn.cn/endfield/official-v4/_next/static/'
+            'chunks/app/%5Blang%5D/(main)/layout-current.js"></script>'
+        )
+        layout = """
+100:(e,a,n)=>{"use strict";let i={src:"https://web.hycdn.cn/endfield/official-v4/_next/static/media/en-us.hash.png",height:10,width:10}},
+101:(e,a,n)=>{"use strict";let i={src:"https://web.hycdn.cn/endfield/official-v4/_next/static/media/zh-cn.hash.png",height:10,width:10}},
+201:(e,a,n)=>{"use strict";let i={src:"https://web.hycdn.cn/endfield/official-v4/_next/static/media/title.hash.png",height:407,width:1920}},
+202:(e,a,n)=>{"use strict";let i={src:"https://web.hycdn.cn/endfield/official-v4/_next/static/media/timeline.hash.png",height:55,width:1920}},
+203:(e,a,n)=>{"use strict";let i={src:"https://web.hycdn.cn/endfield/official-v4/_next/static/media/content.hash.jpg",height:2297,width:1849}},
+{"home.pageTitle":n(100).A.src,"calendar.title":n(201).A.src,"calendar.timeline":n(202).A.src,"calendar.content":n(203).A.src}
+{"home.pageTitle":n(101).A.src,"calendar.title":n(201).A.src,"calendar.timeline":n(202).A.src,"calendar.content":n(203).A.src}
+"""
+
+        layout_url = calendar_module.discover_layout_chunk(homepage)
+        calendar = calendar_module.discover_zh_cn_calendar(layout)
+
+        self.assertEqual(
+            layout_url,
+            "https://web.hycdn.cn/endfield/official-v4/_next/static/"
+            "chunks/app/%5Blang%5D/(main)/layout-current.js",
+        )
+        self.assertEqual(calendar.title.url.rsplit("/", 1)[-1], "title.hash.png")
+        self.assertEqual((calendar.content.width, calendar.content.height), (1849, 2297))
+        self.assertEqual(len(calendar.revision), 16)
+
+    def test_official_calendar_composes_to_reference_size_without_pillow(self):
+        calendar_module = _load_endfield_module("official_calendar")
+        calendar_draw = _load_endfield_module("official_calendar_draw")
+        base = "https://web.hycdn.cn/endfield/official-v4/_next/static/media/"
+        calendar = calendar_module.OfficialVersionCalendar(
+            revision="fixture",
+            title=calendar_module.OfficialCalendarAsset(
+                "calendar.title", base + "title.fixture.png", 1920, 407
+            ),
+            timeline=calendar_module.OfficialCalendarAsset(
+                "calendar.timeline", base + "timeline.fixture.png", 1920, 55
+            ),
+            content=calendar_module.OfficialCalendarAsset(
+                "calendar.content", base + "content.fixture.jpg", 1849, 2297
+            ),
+        )
+
+        rendered_html = calendar_draw.render_official_version_calendar_html(calendar)
+
+        self.assertEqual(calendar_draw.official_calendar_height(calendar), 1632)
+        self.assertIn('class="official-version-calendar"', rendered_html)
+        self.assertIn("calendar-content", rendered_html)
+        self.assertNotIn("PIL", rendered_html)
+
+    def test_plugin_prefers_official_calendar_and_keeps_akedata_fallback(self):
+        source = (ROOT / "plugins/endfield/__init__.py").read_text(encoding="utf-8")
+
+        self.assertIn("official_calendar_source.current()", source)
+        self.assertIn("draw_official_version_calendar(official)", source)
+        self.assertIn("official calendar unavailable, use AkeData fallback", source)
+        self.assertIn("calendar_source.current()", source)
 
     def test_plugin_help_uses_endfield_help_image_with_text_fallback(self):
         source = (ROOT / "plugins/endfield/__init__.py").read_text(encoding="utf-8")
@@ -645,6 +825,7 @@ class EndfieldCommandParserTests(unittest.TestCase):
             self.assertEqual((image.size, image.mode), ((1075, 761), "RGBA"))
         self.assertIn("/zmd 绑定 / 添加账号  可重复追加多个账号（仅私聊）", spec)
         self.assertIn("/zmd 账号 [编号]  账号详情图：干员配装总览", spec)
+        self.assertIn("/zmd 账号 基建 [账号]  据点与帝江号", spec)
         self.assertIn("/zmd 抽卡同步 [账号] [--full]", spec)
         self.assertIn("/zmd 抽卡记录 [账号] [页码] [--池 名称]", spec)
         self.assertIn("/zmd 抽卡导入 [账号]（仅私聊）", spec)

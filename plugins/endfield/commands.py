@@ -21,6 +21,7 @@ QUICK_CALC_ALIASES = {"速算", "quickcalc", "calc"}
 SEARCH_ALIASES = {"搜索", "search", "s"}
 HELP_ALIASES = {"帮助", "help", "h", "?"}
 SOURCE_ALIASES = {"数据源", "source", "sources"}
+CALENDAR_ALIASES = {"版本日历", "日历", "calendar", "schedule"}
 DEV_ALIASES = {"dev"}
 ALIAS_COMMAND_ALIASES = {"别名", "alias"}
 ALIAS_ADD_ALIASES = {"添加", "新增", "add"}
@@ -164,6 +165,8 @@ def parse_command(rest: str) -> ParsedEndfieldCommand:
         return ParsedEndfieldCommand("help")
     if head in SOURCE_ALIASES:
         return ParsedEndfieldCommand("source")
+    if head in CALENDAR_ALIASES:
+        return ParsedEndfieldCommand("calendar")
     if head in DEV_ALIASES:
         dev_action = parts[1].lower() if len(parts) > 1 else "help"
         return ParsedEndfieldCommand("dev", dev_action=dev_action, args=tuple(parts[2:]))
@@ -418,6 +421,7 @@ def format_help() -> str:
             "  /zmd 抽卡导入 [账号]（仅私聊，手机号验证码导入小黑盒历史统计）",
             "  /zmd 抽卡记录 [账号] [页码] [--池 <名称>]",
             "  /zmd 速算 2腐蚀 200（效果可替换为导电或碎甲）",
+            "  /zmd 版本日历（查看当前版本全部开放日程）",
             "",
             "  /ef <关键词> 或 /zmd <关键词>",
             "  /ef 干员 <名称> | /ef op <名称>",

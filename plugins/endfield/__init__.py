@@ -64,6 +64,9 @@ from .draw import (
     draw_gacha_analysis_cards,
     draw_gacha_history_card,
 )
+from .version_calendar_draw import draw_version_calendar
+from .official_calendar import OfficialVersionCalendarSource
+from .official_calendar_draw import draw_official_version_calendar
 from .account_detail_draw import draw_account_detail_cards
 from .account_detail_service import build_account_detail_view
 from .account_base_draw import draw_account_base_card
@@ -94,6 +97,7 @@ from .service import (
     format_status_quick_calc,
 )
 from .sources import source_label, source_order
+from .version_calendar import AkeDataVersionCalendarSource, VersionCalendarError
 
 
 client = WarfarinClient()
@@ -102,6 +106,8 @@ stage_service = EndfieldStageService(client)
 gacha_asset_cache = EndfieldGachaAssetCache(service)
 account_store = EndfieldStore()
 official_client = EndfieldOfficialClient()
+calendar_source = AkeDataVersionCalendarSource(client)
+official_calendar_source = OfficialVersionCalendarSource()
 ENDFIELD_HELP_IMAGE_PATH = (
     Path(__file__).resolve().parents[2] / "assets" / "image" / "help" / "endfield.png"
 )
@@ -115,6 +121,12 @@ _CARD_CACHE: AsyncTTLCache[CardCacheKey, tuple[bytes, ...]] = AsyncTTLCache(
     max_entries=64,
     # A card can render as several images, so bound the cache on total bytes, not page count.
     sizeof=lambda pages: sum(len(page) for page in pages),
+)
+_CALENDAR_CACHE: AsyncTTLCache[str, bytes] = AsyncTTLCache(
+    ttl_seconds=600.0,
+    max_bytes=8 * 1024 * 1024,
+    max_entries=4,
+    sizeof=len,
 )
 
 Resolver = Callable[..., Awaitable[list[EndfieldCandidate]]]
@@ -219,6 +231,18 @@ async def _handle_command(matcher, event: Event, command: ParsedEndfieldCommand)
         return await _finish_endfield_help(matcher)
     if command.action == "source":
         return await matcher.finish(format_source())
+    if command.action == "calendar":
+        try:
+            png = await _render_current_version_calendar()
+            return await _finish_png(matcher, png)
+        except _ExitException:
+            raise
+        except (VersionCalendarError, WarfarinAPIError, StageDataIncomplete) as exc:
+            logger.error(f"[endfield] version calendar unavailable: {exc}")
+            return await matcher.finish("当前版本日历暂不可用，请稍后重试")
+        except Exception:
+            logger.exception("[endfield] version calendar render failed")
+            return await matcher.finish("当前版本日历生成失败，请稍后重试")
     if command.action == "dev":
         if not dev_visible_for_user(str(event_user_id(event)), Config.SUPERUSERS):
             return await matcher.finish(format_unknown())
@@ -1539,6 +1563,25 @@ async def _render_stage_catalog(key: str, source: str = "") -> tuple[bytes, ...]
 
 async def _finish_png(matcher, png: bytes) -> None:
     return await _finish_pngs(matcher, (png,))
+
+
+async def _render_current_version_calendar() -> bytes:
+    try:
+        official = await official_calendar_source.current()
+        return await _CALENDAR_CACHE.get_or_create(
+            f"official:{official.revision}",
+            lambda: draw_official_version_calendar(official),
+        )
+    except Exception as exc:
+        logger.warning(
+            f"[endfield] official calendar unavailable, use AkeData fallback: "
+            f"{type(exc).__name__}: {exc}"
+        )
+    calendar = await calendar_source.current()
+    return await _CALENDAR_CACHE.get_or_create(
+        f"generated:{calendar.version}:{calendar.revision}",
+        lambda: draw_version_calendar(calendar),
+    )
 
 
 async def _finish_endfield_help(matcher) -> None:

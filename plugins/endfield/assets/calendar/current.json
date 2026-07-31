@@ -1,0 +1,50 @@
+{
+  "version": "1.4",
+  "title": "向渊行",
+  "english_title": "HOMECOMING",
+  "starts_at": "2026-07-16T00:00:00+08:00",
+  "ends_at": "2026-09-02T04:00:00+08:00",
+  "official_source": "https://endfield.hypergryph.com/news/9335",
+  "sections": [
+    {"id": "gacha", "label": "寻访", "english": "HEADHUNTING", "symbol": "◇", "accent": "#c90016", "rows": 2, "row_height": 88},
+    {"id": "claim", "label": "申领", "english": "ARSENAL", "symbol": "⌁", "accent": "#d20d20", "rows": 4, "row_height": 44},
+    {"id": "region", "label": "区域", "english": "REGION", "symbol": "▣", "accent": "#cf001b", "rows": 4, "row_height": 40},
+    {"id": "event", "label": "活动", "english": "EVENT", "symbol": "✦", "accent": "#c90016", "rows": 12, "row_height": 42},
+    {"id": "gameplay", "label": "玩法", "english": "GAMEPLAY", "symbol": "◔", "accent": "#df1a22", "rows": 4, "row_height": 48}
+  ],
+  "entries": [
+    {"section": "gacha", "lane": 0, "title": "临渊望北", "subtitle": "特许寻访 · 诀", "start_at": "2026-07-16T12:00:00+08:00", "end_at": "2026-08-09T12:00:00+08:00", "style": "hero teal", "ake": {"kind": "char_pool", "id": "special_1_4_1", "time_id": "time_special_1_4_1"}},
+    {"section": "gacha", "lane": 1, "title": "晨星于此闪耀", "subtitle": "特许寻访 · 梨诺", "start_at": "2026-08-09T12:00:00+08:00", "end_at": "2026-09-02T04:00:00+08:00", "style": "hero violet", "ake": {"kind": "char_pool", "id": "special_1_4_2", "time_id": "time_special_1_4_2"}},
+
+    {"section": "claim", "lane": 0, "title": "军列申领", "subtitle": "四二式·肃阵", "start_at": "2026-07-16T12:00:00+08:00", "end_at": "2026-09-02T04:00:00+08:00", "style": "steel", "ake": {"kind": "weapon_pool", "id": "weponbox_1_4_1"}},
+    {"section": "claim", "lane": 1, "title": "明曜申领", "subtitle": "曜夜的首演", "start_at": "2026-08-09T12:00:00+08:00", "end_at": "2026-09-02T04:00:00+08:00", "style": "steel violet", "ake": {"kind": "weapon_pool", "id": "weponbox_1_4_2"}},
+    {"section": "claim", "lane": 2, "title": "终结申领", "subtitle": "集成武器申领", "start_at": "2026-07-16T12:00:00+08:00", "end_at": "2026-08-09T12:00:00+08:00", "style": "dark yellow", "art": "itemiconbig/wpn_funnel_0013.png"},
+    {"section": "claim", "lane": 3, "title": "染赤申领", "subtitle": "集成武器申领", "start_at": "2026-07-16T12:00:00+08:00", "end_at": "2026-09-02T04:00:00+08:00", "style": "dark yellow", "ake": {"kind": "weapon_pool", "id": "weponbox_1_3_2"}},
+
+    {"section": "region", "lane": 0, "title": "北观禁土", "subtitle": "引入活动", "start_at": "2026-07-16T12:00:00+08:00", "end_at": "2026-08-09T12:00:00+08:00", "style": "region sand", "ake": {"kind": "activity", "id": "activity_map02_guide_008"}},
+    {"section": "region", "lane": 1, "title": "武陵 - 应龙关", "subtitle": "全新区域", "start_at": "2026-07-16T12:00:00+08:00", "end_at": "2026-09-02T04:00:00+08:00", "style": "region slate"},
+    {"section": "region", "lane": 2, "title": "武陵 - 北部禁区", "subtitle": "全新区域", "start_at": "2026-07-16T12:00:00+08:00", "end_at": "2026-09-02T04:00:00+08:00", "style": "region violet"},
+    {"section": "region", "lane": 3, "title": "武陵工业更新 - 气体", "subtitle": "集成工业更新", "start_at": "2026-07-16T12:00:00+08:00", "end_at": "2026-09-02T04:00:00+08:00", "style": "region cyan"},
+
+    {"section": "event", "lane": 0, "title": "踞渊北眺", "subtitle": "限时签到", "start_at": "2026-07-16T12:00:00+08:00", "end_at": "2026-08-09T12:00:00+08:00", "style": "event black", "ake": {"kind": "activity", "id": "activity_checkin_lizhiyan"}},
+    {"section": "event", "lane": 0, "title": "明耀晨星", "subtitle": "限时签到", "start_at": "2026-08-09T12:00:00+08:00", "end_at": "2026-09-02T04:00:00+08:00", "style": "event black violet", "ake": {"kind": "activity", "id": "activity_checkin_lino"}},
+    {"section": "event", "lane": 1, "title": "诀", "subtitle": "作战演练", "start_at": "2026-07-16T12:00:00+08:00", "end_at": "2026-08-09T12:00:00+08:00", "style": "event yellow", "ake": {"kind": "activity", "id": "activity_char_trial_v1d4_1"}},
+    {"section": "event", "lane": 1, "title": "梨诺", "subtitle": "作战演练", "start_at": "2026-08-09T12:00:00+08:00", "end_at": "2026-09-02T04:00:00+08:00", "style": "event yellow violet", "ake": {"kind": "activity", "id": "activity_char_trial_v1d4_2"}},
+    {"section": "event", "lane": 2, "title": "如同流星飞越边界", "subtitle": "叙事活动", "start_at": "2026-08-09T12:00:00+08:00", "end_at": "2026-09-02T04:00:00+08:00", "style": "event story violet"},
+    {"section": "event", "lane": 3, "title": "相伴赠礼", "subtitle": "庆典活动", "start_at": "2026-07-16T12:00:00+08:00", "end_at": "2026-08-09T12:00:00+08:00", "style": "event gift", "ake": {"kind": "activity", "id": "activity_checkin_halfann"}},
+    {"section": "event", "lane": 4, "title": "宏运连连乐", "subtitle": "庆典活动", "start_at": "2026-07-16T12:00:00+08:00", "end_at": "2026-07-31T04:00:00+08:00", "style": "event orange", "ake": {"kind": "activity", "id": "activity_lottery_v1d4"}},
+    {"section": "event", "lane": 5, "title": "炽燃！竞技大会！", "subtitle": "挑战活动", "start_at": "2026-07-30T12:00:00+08:00", "end_at": "2026-08-13T04:00:00+08:00", "style": "event dark red", "ake": {"kind": "activity", "id": "activity_takestwo_1"}},
+    {"section": "event", "lane": 6, "title": "根脉奇境", "subtitle": "趣味活动", "start_at": "2026-08-09T12:00:00+08:00", "end_at": "2026-09-02T04:00:00+08:00", "style": "event gold", "ake": {"kind": "activity", "id": "activity_racingdungeon_1"}},
+    {"section": "event", "lane": 7, "title": "根脉奇境", "subtitle": "内容更新", "start_at": "2026-08-15T04:00:00+08:00", "end_at": "2026-09-02T04:00:00+08:00", "style": "event gold thin"},
+    {"section": "event", "lane": 8, "title": "理智补给", "subtitle": "限时活动", "start_at": "2026-08-02T04:00:00+08:00", "end_at": "2026-08-09T04:00:00+08:00", "style": "event supply", "ake": {"kind": "activity", "id": "activity_stamina_refund_1d4d1"}},
+    {"section": "event", "lane": 8, "title": "理智补给", "subtitle": "限时活动", "start_at": "2026-08-26T04:00:00+08:00", "end_at": "2026-09-02T04:00:00+08:00", "style": "event supply", "ake": {"kind": "activity", "id": "activity_stamina_refund_1d4d2"}},
+    {"section": "event", "lane": 9, "title": "六方巧境", "subtitle": "密境行者 · 常驻解谜活动", "start_at": "2026-08-19T12:00:00+08:00", "end_at": "2026-09-02T04:00:00+08:00", "style": "event puzzle", "art": "activity/activity_tab_bg_racing_dungeon.png"},
+    {"section": "event", "lane": 10, "title": "六方巧境", "subtitle": "系列更新", "start_at": "2026-08-26T04:00:00+08:00", "end_at": "2026-09-02T04:00:00+08:00", "style": "event puzzle thin", "art": "activity/activity_tab_bg_racing_dungeon.png"},
+
+    {"section": "gameplay", "lane": 0, "title": "战争回响", "subtitle": "常驻挑战玩法", "start_at": "2026-07-16T12:00:00+08:00", "end_at": "2026-09-02T04:00:00+08:00", "style": "gameplay red", "ake": {"kind": "activity", "id": "activity_seasontower_0"}},
+    {"section": "gameplay", "lane": 1, "title": "追忆赛季", "subtitle": "战争回响赛季", "start_at": "2026-07-16T12:00:00+08:00", "end_at": "2026-08-09T12:00:00+08:00", "style": "gameplay orange"},
+    {"section": "gameplay", "lane": 1, "title": "谵妄赛季", "subtitle": "战争回响赛季", "start_at": "2026-08-09T12:00:00+08:00", "end_at": "2026-09-02T04:00:00+08:00", "style": "gameplay orange pale"},
+    {"section": "gameplay", "lane": 2, "title": "影拓丰碑", "subtitle": "山中见犼", "start_at": "2026-08-06T12:00:00+08:00", "end_at": "2026-09-02T04:00:00+08:00", "style": "gameplay black", "ake": {"kind": "activity", "id": "activity_high_difficulty_v1d4"}},
+    {"section": "gameplay", "lane": 3, "title": "丰碑留名", "subtitle": "兽犼", "start_at": "2026-08-06T12:00:00+08:00", "end_at": "2026-08-20T04:00:00+08:00", "style": "gameplay red thin", "ake": {"kind": "activity", "id": "activity_high_difficulty_v1d4"}}
+  ]
+}

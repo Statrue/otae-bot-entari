@@ -72,6 +72,18 @@ class SyncState:
 
 
 @dataclass(frozen=True, slots=True)
+class SettlementSnapshot:
+    role_id: str
+    server_id: str
+    settlement_id: str
+    settlement_level: int
+    money_max: int
+    officer_signature: str
+    remain_money: int
+    captured_at: int
+
+
+@dataclass(frozen=True, slots=True)
 class XhhGachaPool:
     pool_id: str
     pool_name: str
@@ -235,6 +247,22 @@ class EndfieldStore:
                     last_error TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY(role_id, server_id, stream_key)
                 );
+                CREATE TABLE IF NOT EXISTS settlement_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    role_id TEXT NOT NULL,
+                    server_id TEXT NOT NULL,
+                    settlement_id TEXT NOT NULL,
+                    settlement_level INTEGER NOT NULL,
+                    money_max INTEGER NOT NULL,
+                    officer_signature TEXT NOT NULL DEFAULT '',
+                    remain_money INTEGER NOT NULL,
+                    captured_at INTEGER NOT NULL,
+                    UNIQUE(role_id, server_id, settlement_id, captured_at)
+                );
+                CREATE INDEX IF NOT EXISTS idx_endfield_settlement_snapshots
+                    ON settlement_snapshots(
+                        role_id, server_id, settlement_id, captured_at DESC
+                    );
                 """
             )
             columns = {
@@ -671,6 +699,70 @@ class EndfieldStore:
                 ),
             )
             self.conn.commit()
+
+    def add_settlement_snapshots(
+        self,
+        snapshots: Iterable[SettlementSnapshot],
+        *,
+        retention_seconds: int = 30 * 24 * 60 * 60,
+        now: int | None = None,
+    ) -> int:
+        rows = list(snapshots)
+        if not rows:
+            return 0
+        current = int(now or time.time())
+        with self._lock:
+            before = self.conn.total_changes
+            self.conn.executemany(
+                """
+                INSERT OR IGNORE INTO settlement_snapshots(
+                    role_id, server_id, settlement_id, settlement_level,
+                    money_max, officer_signature, remain_money, captured_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        row.role_id,
+                        row.server_id,
+                        row.settlement_id,
+                        max(0, int(row.settlement_level)),
+                        max(0, int(row.money_max)),
+                        str(row.officer_signature or ""),
+                        max(0, int(row.remain_money)),
+                        int(row.captured_at),
+                    )
+                    for row in rows
+                ],
+            )
+            inserted = self.conn.total_changes - before
+            self.conn.execute(
+                "DELETE FROM settlement_snapshots WHERE captured_at < ?",
+                (current - max(60, int(retention_seconds)),),
+            )
+            self.conn.commit()
+        return int(inserted)
+
+    def list_settlement_snapshots(
+        self,
+        role_id: str,
+        server_id: str,
+        settlement_id: str,
+        *,
+        since: int = 0,
+    ) -> list[SettlementSnapshot]:
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT role_id, server_id, settlement_id, settlement_level,
+                       money_max, officer_signature, remain_money, captured_at
+                FROM settlement_snapshots
+                WHERE role_id = ? AND server_id = ? AND settlement_id = ?
+                  AND captured_at >= ?
+                ORDER BY captured_at ASC
+                """,
+                (str(role_id), str(server_id), str(settlement_id), max(0, int(since))),
+            ).fetchall()
+        return [SettlementSnapshot(**dict(row)) for row in rows]
 
     def list_sync_states(self, role: EndfieldRole) -> list[SyncState]:
         with self._lock:

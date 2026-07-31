@@ -56,6 +56,15 @@ account_detail_models_module = _load(
 account_detail_module = _load(
     f"{PACKAGE}.account_detail_service", "plugins/endfield/account_detail_service.py"
 )
+account_base_models_module = _load(
+    f"{PACKAGE}.account_base_models", "plugins/endfield/account_base_models.py"
+)
+account_base_service_module = _load(
+    f"{PACKAGE}.account_base_service", "plugins/endfield/account_base_service.py"
+)
+account_base_draw_module = _load(
+    f"{PACKAGE}.account_base_draw", "plugins/endfield/account_base_draw.py"
+)
 COMPACT_THRESHOLD = account_detail_models_module.COMPACT_THRESHOLD
 
 
@@ -96,9 +105,18 @@ class EndfieldPersonalCommandTests(unittest.TestCase):
         self.assertEqual((named.action, named.account_selector), ("accounts", "小明"))
         self.assertEqual(commands_module.parse_command("accounts").account_selector, "")
 
+    def test_parses_account_base_command_and_selector(self):
+        bare = commands_module.parse_command("账号 基建")
+        self.assertEqual((bare.action, bare.account_selector), ("account_base", ""))
+        numbered = commands_module.parse_command("账号 基建 2")
+        self.assertEqual((numbered.action, numbered.account_selector), ("account_base", "2"))
+        named = commands_module.parse_command("账户 帝江号 小明")
+        self.assertEqual((named.action, named.account_selector), ("account_base", "小明"))
+
     def test_help_documents_account_detail_command(self):
         help_text = commands_module.format_help()
         self.assertIn("/zmd 账号 [编号]", help_text)
+        self.assertIn("/zmd 账号 基建 [账号]", help_text)
         self.assertIn("/zmd 添加账号", help_text)
         self.assertIn("可重复追加多个账号", help_text)
 
@@ -357,6 +375,184 @@ class EndfieldAccountDetailViewTests(unittest.TestCase):
         )
         detail["chars"] = detail["chars"][:COMPACT_THRESHOLD]
         self.assertFalse(account_detail_module.build_account_detail_view(detail, uid="x").compact)
+
+
+def account_base_fixture(*, current_ts: int = 1600, money: int = 1600) -> dict:
+    mood_talent = {
+        "id": "spaceship_skill_test_2_2",
+        "name": "节律工作·γ",
+        "desc": "进驻制造舱时，舱室内干员心情消耗降低18%",
+        "iconUrl": "",
+    }
+    recovery_talent = {
+        "id": "spaceship_skill_control_1_2",
+        "name": "温柔中枢·γ",
+        "desc": "进驻总控中枢时，所有干员心情恢复提升12%",
+        "iconUrl": "",
+    }
+    return {
+        "base": {"name": "测试管理员", "serverName": "China"},
+        "currentTs": current_ts,
+        "domain": [
+            {
+                "domainId": "domain_2",
+                "name": "武陵",
+                "settlements": [
+                    {
+                        "id": "stm-test",
+                        "name": "天王坪援建点",
+                        "level": 4,
+                        "remainMoney": str(money),
+                        "moneyMax": "10000",
+                        "officerCharIds": "officer-hash",
+                    }
+                ],
+            }
+        ],
+        "chars": [
+            {
+                "id": "officer-hash",
+                "charData": {
+                    "id": "chr_officer",
+                    "name": "派驻员",
+                    "avatarSqUrl": "",
+                    "cultivationTalents": [],
+                },
+                "talent": {"latestSpaceshipSkillNodes": []},
+            },
+            {
+                "id": "worker-hash",
+                "charData": {
+                    "id": "chr_worker",
+                    "name": "工作员",
+                    "avatarSqUrl": "",
+                    "cultivationTalents": [mood_talent],
+                },
+                "talent": {"latestSpaceshipSkillNodes": [mood_talent["id"]]},
+            },
+            {
+                "id": "control-hash",
+                "charData": {
+                    "id": "chr_control",
+                    "name": "中枢员",
+                    "avatarSqUrl": "",
+                    "cultivationTalents": [recovery_talent],
+                },
+                "talent": {"latestSpaceshipSkillNodes": [recovery_talent["id"]]},
+            },
+        ],
+        "spaceShip": {
+            "rooms": [
+                {
+                    "type": 1,
+                    "level": 3,
+                    "chars": [
+                        {
+                            "charId": "chr_worker",
+                            "physicalStrength": 5000,
+                            "avatarUrl": "",
+                        }
+                    ],
+                },
+                {
+                    "type": 0,
+                    "level": 5,
+                    "chars": [
+                        {
+                            "charId": "chr_control",
+                            "physicalStrength": 8000,
+                            "avatarUrl": "",
+                        }
+                    ],
+                },
+                {"type": 3, "level": 1, "id": "", "chars": []},
+            ]
+        },
+    }
+
+
+class EndfieldAccountBaseViewTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.store = store_module.EndfieldStore(Path(self.temp.name) / "base.db")
+
+    def tearDown(self):
+        self.store.close()
+        self.temp.cleanup()
+
+    def build(self, detail: dict | None = None):
+        return account_base_service_module.build_account_base_view(
+            detail or account_base_fixture(),
+            uid="****1234",
+            role_id="role",
+            server_id="1",
+            nickname="备用昵称",
+            store=self.store,
+        )
+
+    def test_reads_settlements_rooms_and_active_mood_nodes(self):
+        view = self.build()
+        settlement = view.regions[0].settlements[0]
+        self.assertEqual(
+            (view.nickname, view.uid, settlement.name, settlement.officer_name),
+            ("测试管理员", "****1234", "天王坪援建点", "派驻员"),
+        )
+        self.assertEqual([room.name for room in view.rooms], ["总控中枢", "制造舱 I"])
+        worker = view.rooms[1].operators[0]
+        self.assertEqual(worker.name, "工作员")
+        self.assertAlmostEqual(worker.mood_percent, 50.0)
+        self.assertEqual(worker.skills[0].name, "节律工作·γ")
+        self.assertAlmostEqual(worker.drain_percent_per_hour, 7.2 * 0.82)
+        self.assertAlmostEqual(worker.recovery_percent_per_hour, 12.0 * 1.12)
+
+    def test_maps_room_character_id_from_spaceship_skill_node(self):
+        self.assertEqual(
+            account_base_service_module._spaceship_skill_char_id(
+                "spaceship_skill_chr_0017_yvonne_2_2"
+            ),
+            "chr_0017_yvonne",
+        )
+
+    def test_first_snapshot_is_pending_then_rate_is_sampled(self):
+        first = self.build(account_base_fixture(current_ts=1000, money=1000))
+        self.assertFalse(first.regions[0].settlements[0].rate.available)
+        second = self.build(account_base_fixture(current_ts=1600, money=1600))
+        rate = second.regions[0].settlements[0].rate
+        self.assertTrue(rate.available)
+        self.assertEqual(rate.confidence, "low")
+        self.assertAlmostEqual(rate.value_per_hour, 3600.0)
+        self.assertAlmostEqual(second.regions[0].settlements[0].hours_to_full, 8400 / 3600)
+
+    def test_collection_and_configuration_change_reset_sampling(self):
+        self.build(account_base_fixture(current_ts=1000, money=5000))
+        collected = self.build(account_base_fixture(current_ts=1600, money=100))
+        self.assertFalse(collected.regions[0].settlements[0].rate.available)
+
+        detail = account_base_fixture(current_ts=2200, money=700)
+        detail["domain"][0]["settlements"][0]["level"] = 3
+        changed = self.build(detail)
+        self.assertFalse(changed.regions[0].settlements[0].rate.available)
+
+    def test_snapshot_retention_and_roundtrip(self):
+        old = store_module.SettlementSnapshot(
+            "role", "1", "stm", 1, 100, "", 10, 100
+        )
+        fresh = replace(old, captured_at=1000, remain_money=20)
+        self.store.add_settlement_snapshots([old, fresh], retention_seconds=500, now=1000)
+        rows = self.store.list_settlement_snapshots("role", "1", "stm")
+        self.assertEqual([(row.captured_at, row.remain_money) for row in rows], [(1000, 20)])
+
+    def test_renderer_uses_approved_content_without_defense_or_assignment_icon_row(self):
+        view = self.build()
+        html = asyncio.run(account_base_draw_module.render_account_base_card_html(view))
+        self.assertIn("width:1550px", html)
+        self.assertIn("ENDFIELD / ACCOUNT INFRASTRUCTURE", html)
+        self.assertIn("基建与帝江号", html)
+        self.assertIn("据点存票", html)
+        self.assertIn("帝江号心情", html)
+        self.assertIn("--region-color:#6bffff", html)
+        self.assertNotIn("区域防护", html)
+        self.assertNotIn(">派驻干员<", html)
 
 
 class EndfieldCredentialAndStoreTests(unittest.TestCase):

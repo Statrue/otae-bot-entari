@@ -26,6 +26,7 @@ ALIAS_COMMAND_ALIASES = {"别名", "alias"}
 ALIAS_ADD_ALIASES = {"添加", "新增", "add"}
 BIND_ALIASES = {"绑定", "添加账号", "新增账号", "bind", "add-account", "addaccount"}
 ACCOUNT_ALIASES = {"账号", "账户", "account", "accounts"}
+ACCOUNT_BASE_ALIASES = {"基建", "帝江号", "base", "infrastructure"}
 PRIMARY_ALIASES = {"主账号", "主账户", "primary"}
 UNBIND_ALIASES = {"解绑", "unbind"}
 ATTENDANCE_ALIASES = {"签到", "checkin", "attendance"}
@@ -244,6 +245,11 @@ def _parse_personal_command(parts: list[str]) -> ParsedEndfieldCommand | None:
     if head in BIND_ALIASES:
         return ParsedEndfieldCommand("bind")
     if head in ACCOUNT_ALIASES:
+        if len(parts) > 1 and parts[1].lower() in ACCOUNT_BASE_ALIASES:
+            return ParsedEndfieldCommand(
+                "account_base",
+                account_selector=" ".join(parts[2:]).strip(),
+            )
         return ParsedEndfieldCommand("accounts", account_selector=" ".join(parts[1:]).strip())
     if head in PRIMARY_ALIASES:
         selector = " ".join(parts[1:]).strip()
@@ -405,6 +411,7 @@ def format_help() -> str:
             "终末地查询用法：",
             "  /zmd 绑定 | /zmd 添加账号（仅私聊，可重复追加多个账号）",
             "  /zmd 账号 [编号]（账号详情图：干员、装备、武器、技能等级、潜能）",
+            "  /zmd 账号 基建 [账号]（据点存票、增长速度与帝江号心情）",
             "  /zmd 主账号 <编号> | /zmd 解绑 <编号>（仅私聊）",
             "  /zmd 签到 [全部|编号|昵称|UID后四位]",
             "  /zmd 抽卡 [账号] | /zmd 抽卡同步 [账号] [--full]",

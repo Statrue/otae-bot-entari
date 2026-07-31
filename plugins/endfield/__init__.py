@@ -66,6 +66,8 @@ from .draw import (
 )
 from .account_detail_draw import draw_account_detail_cards
 from .account_detail_service import build_account_detail_view
+from .account_base_draw import draw_account_base_card
+from .account_base_service import build_account_base_view
 from .stage_draw import draw_stage_card, draw_stage_catalog_cards
 from .stage_service import EndfieldStageService, StageVariantNotFound
 from .stage_source import StageDataIncomplete
@@ -229,7 +231,7 @@ async def _handle_command(matcher, event: Event, command: ParsedEndfieldCommand)
         return await matcher.finish(
             format_status_quick_calc(command.status_name, command.status_level, command.arts_strength)
         )
-    if command.action in {"bind", "accounts", "primary", "unbind", "attendance", "gacha", "gacha_history", "gacha_sync", "gacha_import"}:
+    if command.action in {"bind", "accounts", "account_base", "primary", "unbind", "attendance", "gacha", "gacha_history", "gacha_sync", "gacha_import"}:
         return await _handle_personal_command(matcher, event, command)
     if command.action == "loadout":
         return await _handle_loadout(matcher, command)
@@ -333,6 +335,9 @@ async def _handle_personal_command(matcher, event: Event, command: ParsedEndfiel
         if command.action == "accounts":
             cipher = CredentialCipher.from_env()
             return await _handle_accounts(matcher, qq_user_id, command, cipher, group=is_group(event))
+        if command.action == "account_base":
+            cipher = CredentialCipher.from_env()
+            return await _handle_account_base(matcher, qq_user_id, command, cipher, group=is_group(event))
         if command.action == "primary":
             role = account_store.set_primary(qq_user_id, command.account_selector)
             return await matcher.finish(
@@ -507,6 +512,62 @@ async def _render_account_detail(
         currency_balances=currency_balances,
     )
     return await _finish_pngs(matcher, await draw_account_detail_cards(view))
+
+
+async def _handle_account_base(
+    matcher,
+    qq_user_id: str,
+    command: ParsedEndfieldCommand,
+    cipher: CredentialCipher,
+    *,
+    group: bool,
+) -> None:
+    roles = account_store.list_roles(qq_user_id)
+    if not roles:
+        return await matcher.finish("尚未绑定终末地账号。使用 /zmd 绑定 开始绑定。")
+    if command.account_selector:
+        role = account_store.resolve_role(qq_user_id, command.account_selector)
+        if role is None:
+            return await matcher.finish("未找到对应账号，请使用 /zmd 账号 查看编号。")
+        return await _render_account_base(matcher, role, cipher, group=group)
+    if len(roles) == 1:
+        return await _render_account_base(matcher, roles[0], cipher, group=group)
+
+    answer = await prompt_silently(
+        _format_accounts(roles, reveal_uid=not group, detail_hint=True), timeout=60
+    )
+    if answer is None:
+        return await matcher.finish()
+    text = answer.extract_plain_text() if hasattr(answer, "extract_plain_text") else str(answer or "")
+    text = text.strip()
+    if not text or text.casefold() in {"取消", "cancel", "q", "quit"}:
+        return await matcher.finish("已取消账号查询。")
+    selection = parse_candidate_selection(text, len(roles))
+    role = roles[selection] if selection is not None else account_store.resolve_role(qq_user_id, text)
+    if role is None:
+        return await matcher.finish(f"编号无效，请输入 1-{len(roles)}。")
+    return await _render_account_base(matcher, role, cipher, group=group)
+
+
+async def _render_account_base(
+    matcher,
+    role: EndfieldRole,
+    cipher: CredentialCipher,
+    *,
+    group: bool,
+) -> None:
+    token = account_store.decrypt_token(role, cipher)
+    detail = await official_client.card_detail(token, role)
+    view = build_account_base_view(
+        detail,
+        uid=role.masked_uid if group else role.role_id,
+        role_id=role.role_id,
+        server_id=role.server_id,
+        nickname=role.nickname,
+        server_name=role.server_name or role.server_id,
+        store=account_store,
+    )
+    return await _finish_pngs(matcher, (await draw_account_base_card(view),))
 
 
 async def _handle_attendance(

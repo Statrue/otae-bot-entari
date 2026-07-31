@@ -74,13 +74,15 @@ def render_official_version_calendar_html(
     asset_urls: dict[str, str] | None = None,
 ) -> str:
     asset_urls = asset_urls or {}
+    canvas_width = max(asset.width for asset in calendar.assets)
     images = []
     for asset in calendar.assets:
         url = asset_urls.get(asset.url, asset.url)
+        width = round(asset.width * CALENDAR_WIDTH / canvas_width)
         height = round(asset.height * CALENDAR_WIDTH / asset.width)
         images.append(
             f'<img class="{_esc_attr(asset.key.replace(".", "-"))}" '
-            f'src="{_esc_attr(url)}" width="{CALENDAR_WIDTH}" height="{height}" '
+            f'src="{_esc_attr(url)}" width="{width}" height="{height}" '
             f'alt="{_esc_attr(asset.key)}">'
         )
     return f"""<!doctype html>
@@ -98,8 +100,10 @@ html, body {{ margin: 0; padding: 0; background: #050505; }}
 }}
 .official-version-calendar img {{
   display: block;
-  width: {CALENDAR_WIDTH}px;
   object-fit: fill;
+}}
+.calendar-content {{
+  margin-left: auto;
 }}
 .official-footer {{
   position: relative;

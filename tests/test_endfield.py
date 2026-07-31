@@ -799,6 +799,8 @@ class EndfieldCommandParserTests(unittest.TestCase):
         self.assertEqual(calendar_draw.official_calendar_height(calendar), 1632)
         self.assertIn('class="official-version-calendar"', rendered_html)
         self.assertIn("calendar-content", rendered_html)
+        self.assertIn('width="1040" height="1342"', rendered_html)
+        self.assertIn("margin-left: auto", rendered_html)
         self.assertNotIn("PIL", rendered_html)
 
     def test_plugin_prefers_official_calendar_and_keeps_akedata_fallback(self):

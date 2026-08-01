@@ -545,7 +545,7 @@ class EndfieldService:
                     medal,
                     description=_tier_text(medal.tier_desc, medal.max_level, medal.description),
                     condition=_tier_text(medal.tier_cond, medal.max_level),
-                    next_description="",
+                    next_description=_tier_text(medal.tier_desc, medal.max_level, medal.description),
                     next_condition=medal.plate_condition or "",
                     next_icon_url=info.plated_icon or "",
                 ))

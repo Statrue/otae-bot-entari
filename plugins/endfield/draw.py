@@ -800,11 +800,12 @@ async def _draw_neutral_card(selector: str, body: str, *, extra_css: str = "") -
 MEDAL_PAGE_BUDGETS: tuple[int, ...] = (56, 40, 28, 18)
 MEDAL_DOUBLE_COLUMN_MIN = 6  # 单个列表条目 ≥ 此值时启用双列，压缩卡片高度（F1 新增列表 / F2 各缺章分组）
 MEDAL_CARD_CSS = """
-.medal-stats{display:flex;flex-direction:column;gap:10px;margin-bottom:14px}
+.medal-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+.medal-stats--rows{display:flex;flex-direction:column}
 .medal-row{display:flex;gap:10px}
-.medal-stats .tile{flex:1;padding:11px 14px;border:1px solid #999;background:#fff}
-.medal-stats .tile span{display:block;color:#666;font-size:13px}
-.medal-stats .tile strong{display:block;margin-top:4px;font-size:26px;line-height:1}
+.medal-stats .tile{flex:1;display:flex;align-items:center;justify-content:center;gap:10px;padding:14px;border:1px solid #999;background:#fff}
+.medal-stats .tile span{color:#1f1f1f;font-size:16px;font-weight:700}
+.medal-stats .tile strong{font-size:26px;line-height:1;font-weight:900;color:#222}
 .medal-stats .tile.primary{border:3px solid #222}
 .medal-stats .lv-tile{flex:1;display:flex;align-items:center;justify-content:center;gap:10px;padding:8px;border:1px solid #999;background:#fff}
 .medal-stats .lv-tile strong{margin:0;font-size:26px;line-height:1;font-weight:900;color:#222}
@@ -963,7 +964,7 @@ async def draw_medal_missing_card(view: MedalMissingView) -> tuple[bytes, ...]:
     if not sections:
         sections.append('<div class="empty">统计口径内未发现缺漏，蚀刻章已全部集齐。</div>')
     notice = (
-        '<div class="medal-notice">缺章过多，仅展示部分，完整清单请在游戏内查看。</div>'
+        '<div class="medal-notice">未升满、未镀层仅展示部分，完整清单请在游戏内查看。</div>'
         if view.truncated else ""
     )
     stats = _medal_stats_block(
@@ -980,7 +981,7 @@ async def draw_medal_missing_card(view: MedalMissingView) -> tuple[bytes, ...]:
     </main>
     """
     extra = MEDAL_CARD_CSS + (
-        ".medal-notice{margin:6px 0 12px;padding:8px 14px;color:#666;font-size:12px}"
+        ".medal-notice{margin:-4px 2px 12px;padding:2px 2px;color:#888;font-size:11px}"
     )
     return (await _draw_neutral_card("medal-missing-card", body, extra_css=extra),)
 
@@ -1035,7 +1036,14 @@ def _medal_stats_block(
     level_counts: dict[int, int],
     row2: list[tuple[str, int]],
 ) -> str:
-    """两行统计区：第 1 行 = 主指标 + 三级奖章数量（带六边形档位 icon）；第 2 行 = row2 各项。"""
+    """统计区。
+    row2 项数与首行(primary+三档 icon=4)一致时用 4 列网格平铺，两行共享列模板、纵向严格对齐；
+    否则退回两行 flex（首行 primary+三档、次行 row2 等宽填满），避免次行留空（F1 版本对比）。
+    """
+    primary = (
+        f'<div class="tile primary"><span>{esc(primary_label)}</span>'
+        f'<strong>{primary_value}</strong></div>'
+    )
     lv_cells = "".join(
         f'<div class="lv-tile">{_medal_grade_icon(lv)}<strong>{level_counts.get(lv, level_counts.get(str(lv), 0))}</strong></div>'
         for lv in (3, 2, 1)
@@ -1044,10 +1052,11 @@ def _medal_stats_block(
         f'<div class="tile"><span>{esc(label)}</span><strong>{value}</strong></div>'
         for label, value in row2
     )
+    if len(row2) == 4:
+        return f'<section class="medal-stats">{primary}{lv_cells}{row2_html}</section>'
     return (
-        '<section class="medal-stats">'
-        f'<div class="medal-row"><div class="tile primary"><span>{esc(primary_label)}</span>'
-        f'<strong>{primary_value}</strong></div>{lv_cells}</div>'
+        '<section class="medal-stats medal-stats--rows">'
+        f'<div class="medal-row">{primary}{lv_cells}</div>'
         f'<div class="medal-row">{row2_html}</div>'
         '</section>'
     )

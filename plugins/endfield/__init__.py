@@ -22,7 +22,15 @@ from utils.http_client import clear_http_cache, get_http_cache_stats
 from utils.temp_files import schedule_temp_file_cleanup
 
 from .client import WarfarinAPIError, WarfarinClient
-from .account_client import AttendanceResult, EndfieldAPIError, EndfieldOfficialClient
+from .account_client import (
+    ACCOUNT_PROVIDER_CN,
+    ACCOUNT_PROVIDER_SKPORT,
+    AttendanceResult,
+    EndfieldAPIError,
+    EndfieldOfficialClient,
+    encode_account_credential,
+    is_asia_role,
+)
 from .account_crypto import CredentialCipher, CredentialKeyError
 from .account_store import EndfieldRole, EndfieldStore, RoleCandidate
 from .aliases import add_alias, alias_targets
@@ -405,40 +413,52 @@ async def _handle_personal_command(matcher, event: Event, command: ParsedEndfiel
 
 
 async def _handle_binding(matcher, qq_user_id: str, cipher: CredentialCipher) -> None:
-    method = await _prompt_text(
-        "请选择绑定方式：\n1. Token 绑定\n2. 手机号验证码绑定\n"
-        "可重复绑定其他鹰角账号，已有账号不会被覆盖。\n回复 1 或 2；回复“取消”退出。",
+    region = await _prompt_text(
+        "请选择服务器：\n1. 国服（森空岛，支持 Token/短信/扫码）\n"
+        "2. 亚服（SKPORT，当前仅支持 Token）\n"
+        "回复 1 或 2；回复“取消”退出。",
         timeout=90,
     )
-    if method is None:
+    if region is None:
         return await matcher.finish("绑定已取消或等待超时。")
-    normalized = method.casefold()
-    if normalized in {"1", "token", "t"}:
-        await matcher.send(
-            "请在浏览器登录森空岛后打开：\nhttps://web-api.skland.com/account/info/hg\n"
-            "复制响应中 data.content 的完整内容并发送。不要在群聊或其他平台公开该内容。"
-        )
-        account_token = await _prompt_text("请发送 data.content；回复“取消”退出。", timeout=150)
-        if account_token is None:
-            return await matcher.finish("绑定已取消或等待超时。")
-    elif normalized in {"2", "短信", "手机", "sms"}:
-        phone = await _prompt_text("请输入用于鹰角账号登录的手机号；回复“取消”退出。", timeout=90)
-        if phone is None:
-            return await matcher.finish("绑定已取消或等待超时。")
-        if not re.fullmatch(r"1\d{10}", phone):
-            return await matcher.finish("手机号格式不正确，绑定已取消。")
-        await official_client.send_phone_code(phone)
-        code = await _prompt_text("验证码已发送，请输入短信验证码；回复“取消”退出。", timeout=120)
-        if code is None:
-            return await matcher.finish("绑定已取消或等待超时。")
-        if not re.fullmatch(r"\d{4,8}", code):
-            return await matcher.finish("验证码格式不正确，绑定已取消。")
-        account_token = await official_client.token_by_phone_code(phone, code)
+    normalized_region = region.casefold()
+    if normalized_region in {"1", "国服", "cn", "china"}:
+        provider = ACCOUNT_PROVIDER_CN
+    elif normalized_region in {"2", "亚服", "亞洲", "亚洲", "asia", "skport"}:
+        provider = ACCOUNT_PROVIDER_SKPORT
     else:
-        return await matcher.finish("未识别绑定方式，绑定已取消。")
+        return await matcher.finish("未识别服务器，绑定已取消。")
+
+    if provider == ACCOUNT_PROVIDER_SKPORT:
+        await matcher.send(
+            "请在浏览器登录 SKPORT（https://www.skport.com/）后打开：\n"
+            "https://web-api.skport.com/cookie_store/account_token\n"
+            "页面会返回类似下面的内容（仅为格式范例，范例 Token 不能用于绑定）：\n"
+            '{"code":0,"data":{"content":"FlJTn48gU1OwP9R7lQUpDFZJ"},"msg":""}\n'
+            "上面的例子中，正确复制的内容是：\n"
+            "FlJTn48gU1OwP9R7lQUpDFZJ\n"
+            "请从你自己的页面中，只复制 content 后面双引号里的 Token。\n"
+            "不要复制双引号，也不要复制整段 JSON。\n"
+            "不要发送上面的范例 Token。\n"
+            "不要在群聊或其他平台公开该内容。"
+        )
+        raw_account_token = await _prompt_text(
+            "请发送 content 双引号内的 Token；回复“取消”退出。", timeout=150
+        )
+        if raw_account_token is None:
+            return await matcher.finish("绑定已取消或等待超时。")
+        account_token = encode_account_credential(raw_account_token, provider)
+    else:
+        account_token = await _bind_cn_account_token(matcher)
+        if account_token is None:
+            return None
 
     roles = await official_client.discover_roles(account_token)
-    if not roles:
+    if provider == ACCOUNT_PROVIDER_SKPORT:
+        roles = [role for role in roles if is_asia_role(role)]
+        if not roles:
+            return await matcher.finish("该 Gryphline 账号下未找到终末地亚服角色。")
+    elif not roles:
         return await matcher.finish("该鹰角账号下未找到终末地角色。")
     selected = await _select_binding_roles(roles)
     if selected is None:
@@ -450,7 +470,8 @@ async def _handle_binding(matcher, qq_user_id: str, cipher: CredentialCipher) ->
         (role.role_id, role.server_id) not in previous_keys for role in selected
     )
     updated_count = len(selected) - added_count
-    summary = f"绑定完成：新增 {added_count} 个账号"
+    region_label = "亚服" if provider == ACCOUNT_PROVIDER_SKPORT else "国服"
+    summary = f"{region_label}绑定完成：新增 {added_count} 个账号"
     if updated_count:
         summary += f"，更新 {updated_count} 个账号"
     summary += f"；当前共绑定 {len(bound_roles)} 个账号。"
@@ -459,6 +480,92 @@ async def _handle_binding(matcher, qq_user_id: str, cipher: CredentialCipher) ->
             f"- {role.nickname} · {role.server_name or role.server_id} · UID {role.role_id}" for role in selected
         )
     )
+
+
+async def _bind_cn_account_token(matcher) -> str | None:
+    method = await _prompt_text(
+        "请选择绑定方式：\n1. Token 绑定\n2. 手机号验证码绑定\n3. 二维码扫码绑定\n"
+        "可重复绑定其他鹰角账号，已有账号不会被覆盖。\n回复 1、2 或 3；回复“取消”退出。",
+        timeout=90,
+    )
+    if method is None:
+        await matcher.finish("绑定已取消或等待超时。")
+        return None
+    normalized = method.casefold()
+    if normalized in {"1", "token", "t"}:
+        await matcher.send(
+            "请在浏览器登录森空岛后打开：\nhttps://web-api.skland.com/account/info/hg\n"
+            "复制响应中 data.content 的完整内容并发送。不要在群聊或其他平台公开该内容。"
+        )
+        account_token = await _prompt_text("请发送 data.content；回复“取消”退出。", timeout=150)
+        if account_token is None:
+            await matcher.finish("绑定已取消或等待超时。")
+            return None
+    elif normalized in {"2", "短信", "手机", "sms"}:
+        phone = await _prompt_text("请输入用于鹰角账号登录的手机号；回复“取消”退出。", timeout=90)
+        if phone is None:
+            await matcher.finish("绑定已取消或等待超时。")
+            return None
+        if not re.fullmatch(r"1\d{10}", phone):
+            await matcher.finish("手机号格式不正确，绑定已取消。")
+            return None
+        await official_client.send_phone_code(phone)
+        code = await _prompt_text("验证码已发送，请输入短信验证码；回复“取消”退出。", timeout=120)
+        if code is None:
+            await matcher.finish("绑定已取消或等待超时。")
+            return None
+        if not re.fullmatch(r"\d{4,8}", code):
+            await matcher.finish("验证码格式不正确，绑定已取消。")
+            return None
+        account_token = await official_client.token_by_phone_code(phone, code)
+    elif normalized in {"3", "二维码", "扫码", "qr", "qrcode"}:
+        account_token = await _bind_cn_qr_account(matcher)
+        if account_token is None:
+            return None
+    else:
+        await matcher.finish("未识别绑定方式，绑定已取消。")
+        return None
+    return encode_account_credential(account_token, ACCOUNT_PROVIDER_CN)
+
+
+async def _bind_cn_qr_account(matcher) -> str | None:
+    ticket = await official_client.create_qr_login()
+    qr_png = _render_qr_png(ticket.scan_url)
+    await matcher.send(
+        "请使用森空岛或《明日方舟：终末地》App 扫描下方二维码并确认登录。"
+        "二维码有效期较短，请勿转发给他人。"
+    )
+    await matcher.send(ChainMsg([make_image(raw=qr_png)]))
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 150
+    scan_notice_sent = False
+    while loop.time() < deadline:
+        status = await official_client.check_qr_login(ticket.scan_id)
+        if status.state == "confirmed":
+            return await official_client.token_by_scan_code(status.scan_code)
+        if status.state == "scanned" and not scan_notice_sent:
+            await matcher.send("扫码成功，请在手机上确认登录。")
+            scan_notice_sent = True
+        if status.state == "expired":
+            await matcher.finish("二维码已过期，请重新执行绑定命令。")
+            return None
+        await asyncio.sleep(min(2, max(0, deadline - loop.time())))
+
+    await matcher.finish("等待扫码确认超时，请重新执行绑定命令。")
+    return None
+
+
+def _render_qr_png(content: str) -> bytes:
+    import cv2
+
+    matrix = cv2.QRCodeEncoder_create().encode(content)
+    matrix = cv2.copyMakeBorder(matrix, 4, 4, 4, 4, cv2.BORDER_CONSTANT, value=255)
+    matrix = cv2.resize(matrix, None, fx=10, fy=10, interpolation=cv2.INTER_NEAREST)
+    encoded, png = cv2.imencode(".png", matrix)
+    if not encoded:
+        raise RuntimeError("二维码图片生成失败")
+    return png.tobytes()
 
 
 async def _select_binding_roles(roles: list[RoleCandidate]) -> list[RoleCandidate] | None:

@@ -965,6 +965,118 @@ class EndfieldOfficialClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("secret", sanitized)
         self.assertNotIn("https://", sanitized)
 
+    async def test_cn_qr_login_uses_official_scan_flow(self):
+        requests: list[httpx.Request] = []
+        scan_statuses = iter([
+            {"status": 100, "msg": "未扫码"},
+            {"status": 101, "msg": "已扫码，待确认"},
+            {"status": 0, "data": {"scanCode": "confirmed-scan-code"}},
+        ])
+
+        async def handler(request: httpx.Request):
+            requests.append(request)
+            if request.url.path == "/general/v1/gen_scan/login":
+                return httpx.Response(200, json={
+                    "status": 0,
+                    "data": {
+                        "scanId": "scan-id",
+                        "scanUrl": "hypergryph://scan_login?scanId=scan-id",
+                    },
+                })
+            if request.url.path == "/general/v1/scan_status":
+                return httpx.Response(200, json=next(scan_statuses))
+            if request.url.path == "/user/auth/v1/token_by_scan_code":
+                self.assertEqual(json.loads(request.content), {"scanCode": "confirmed-scan-code"})
+                return httpx.Response(200, json={"status": 0, "data": {"token": "account-token"}})
+            raise AssertionError(str(request.url))
+
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client = client_module.EndfieldOfficialClient(http)
+
+        ticket = await client.create_qr_login()
+        pending = await client.check_qr_login(ticket.scan_id)
+        scanned = await client.check_qr_login(ticket.scan_id)
+        confirmed = await client.check_qr_login(ticket.scan_id)
+        token = await client.token_by_scan_code(confirmed.scan_code)
+
+        self.assertEqual(ticket, client_module.QrLoginTicket(
+            "scan-id", "hypergryph://scan_login?scanId=scan-id"
+        ))
+        self.assertEqual(pending, client_module.QrLoginStatus("pending"))
+        self.assertEqual(scanned, client_module.QrLoginStatus("scanned"))
+        self.assertEqual(confirmed, client_module.QrLoginStatus("confirmed", "confirmed-scan-code"))
+        self.assertEqual(token, "account-token")
+        self.assertEqual(
+            [request.url.path for request in requests],
+            [
+                "/general/v1/gen_scan/login",
+                "/general/v1/scan_status",
+                "/general/v1/scan_status",
+                "/general/v1/scan_status",
+                "/user/auth/v1/token_by_scan_code",
+            ],
+        )
+        self.assertEqual(requests[1].url.params["scanId"], "scan-id")
+        await http.aclose()
+
+    async def test_cn_qr_login_reports_expired_status(self):
+        async def handler(_request: httpx.Request):
+            return httpx.Response(200, json={"status": 102, "msg": "二维码已过期"})
+
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client = client_module.EndfieldOfficialClient(http)
+
+        self.assertEqual(await client.check_qr_login("scan-id"), client_module.QrLoginStatus("expired"))
+        await http.aclose()
+
+    async def test_cn_qr_login_rejects_unknown_scan_status(self):
+        async def handler(_request: httpx.Request):
+            return httpx.Response(200, json={"status": 103, "msg": "状态异常"})
+
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client = client_module.EndfieldOfficialClient(http)
+
+        with self.assertRaises(client_module.EndfieldAPIError):
+            await client.check_qr_login("scan-id")
+        await http.aclose()
+
+    async def test_account_oauth_retries_one_transient_network_failure(self):
+        http = mock.AsyncMock()
+        http.request = mock.AsyncMock(side_effect=[
+            httpx.ConnectError("temporary connection failure"),
+            httpx.Response(200, json={"status": 0, "data": {"token": "oauth-token"}}),
+        ])
+        client = client_module.EndfieldOfficialClient(http)
+
+        with mock.patch.object(client_module.asyncio, "sleep", mock.AsyncMock()) as sleep:
+            token = await client._oauth_token(
+                "account-token", client_module.SKLAND_APP_CODE, grant_type=0
+            )
+
+        self.assertEqual(token, "oauth-token")
+        self.assertEqual(http.request.await_count, 2)
+        sleep.assert_awaited_once_with(0.4)
+
+    def test_account_credential_keeps_legacy_cn_tokens_and_wraps_skport_tokens(self):
+        self.assertEqual(
+            client_module.decode_account_credential("legacy-cn-token"),
+            (client_module.ACCOUNT_PROVIDER_CN, "legacy-cn-token"),
+        )
+        credential = client_module.encode_account_credential(
+            '{"data":{"content":"global-token"}}',
+            client_module.ACCOUNT_PROVIDER_SKPORT,
+        )
+        self.assertEqual(
+            client_module.decode_account_credential(credential),
+            (client_module.ACCOUNT_PROVIDER_SKPORT, "global-token"),
+        )
+
+    def test_asia_role_detection_uses_server_metadata(self):
+        role = store_module.RoleCandidate("binding", "role", "2", "测试", "Asia")
+        europe = store_module.RoleCandidate("binding", "role", "3", "测试", "Americas / Europe")
+        self.assertTrue(client_module.is_asia_role(role))
+        self.assertFalse(client_module.is_asia_role(europe))
+
     def test_skland_binding_parser_keeps_binding_uid(self):
         payload = {
             "code": 0,
@@ -998,6 +1110,148 @@ class EndfieldOfficialClientTests(unittest.IsolatedAsyncioTestCase):
         }
         roles = client_module._extract_gacha_binding_roles(payload)
         self.assertEqual([(item.binding_uid, item.role_id) for item in roles], [("binding-uid", "role-a"), ("binding-uid", "role-b")])
+
+    async def test_skport_role_discovery_uses_global_account_and_community_hosts(self):
+        requests = []
+
+        async def handler(request: httpx.Request):
+            requests.append(request)
+            if request.url.host == "as.gryphline.com":
+                body = json.loads(request.content)
+                field = "code" if body["type"] == 0 else "token"
+                return httpx.Response(200, json={"status": 0, "data": {field: f"oauth-{field}"}})
+            if request.url.path == "/web/v1/user/auth/generate_cred_by_code":
+                return httpx.Response(200, json={"code": 0, "data": {"cred": "cred"}})
+            if request.url.path == "/web/v1/auth/refresh":
+                return httpx.Response(200, json={"code": 0, "timestamp": 1000, "data": {"salt": "salt"}})
+            if request.url.host == "zonai.skport.com":
+                return httpx.Response(200, json={
+                    "code": 0,
+                    "data": {"list": [{
+                        "appCode": "endfield",
+                        "bindingList": [{
+                            "uid": "binding-global",
+                            "defaultRole": {
+                                "roleId": "role-asia",
+                                "serverId": "2",
+                                "nickname": "亚服角色",
+                                "serverName": "Asia",
+                            },
+                            "roles": [],
+                        }],
+                    }]},
+                })
+            if request.url.host == "binding-api-account-prod.gryphline.com":
+                return httpx.Response(200, json={
+                    "status": 0,
+                    "data": {"list": [{
+                        "appCode": "endfield",
+                        "bindingList": [{
+                            "uid": "binding-global",
+                            "roles": [{
+                                "roleId": "role-asia", "serverId": "2",
+                                "nickName": "亚服角色", "serverName": "Asia",
+                            }],
+                        }],
+                    }]},
+                })
+            raise AssertionError(str(request.url))
+
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client = client_module.EndfieldOfficialClient(http)
+        credential = client_module.encode_account_credential(
+            "global-account-token", client_module.ACCOUNT_PROVIDER_SKPORT
+        )
+        with mock.patch.object(client_module.time, "time", return_value=1000):
+            roles = await client.discover_roles(credential)
+
+        self.assertEqual(
+            [(role.binding_uid, role.role_id, role.server_name) for role in roles],
+            [("binding-global", "role-asia", "Asia")],
+        )
+        self.assertTrue(any(
+            request.url.host == "as.gryphline.com"
+            and json.loads(request.content)["appCode"] == "6eb76d4e13aa36e6"
+            for request in requests
+        ))
+        self.assertTrue(any(
+            request.url.host == "as.gryphline.com"
+            and json.loads(request.content)["appCode"] == "3dacefa138426cfe"
+            for request in requests
+        ))
+        self.assertTrue(any(request.url.host == "zonai.skport.com" for request in requests))
+        self.assertTrue(any(
+            request.url.host == "binding-api-account-prod.gryphline.com" for request in requests
+        ))
+        await http.aclose()
+
+    async def test_skport_card_detail_uses_global_host_and_role_header(self):
+        captured = {}
+
+        async def handler(request: httpx.Request):
+            captured["request"] = request
+            return httpx.Response(200, json={"code": 0, "data": {"detail": {"base": {"name": "Asia"}}}})
+
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client = client_module.EndfieldOfficialClient(http)
+        client._skland_context = mock.AsyncMock(return_value=client_module._SklandContext(
+            "cred", "salt", 1000, 1000, 99999, client_module.ACCOUNT_PROVIDER_SKPORT
+        ))
+        role = mock.Mock(role_id="role-asia", server_id="2")
+        with mock.patch.object(client_module.time, "time", return_value=1000):
+            detail = await client.card_detail("credential", role)
+
+        request = captured["request"]
+        self.assertEqual(request.url.host, "zonai.skport.com")
+        self.assertEqual(request.headers["sk-game-role"], "3_role-asia_2")
+        self.assertEqual(request.headers["origin"], "https://game.skport.com")
+        self.assertEqual(detail["base"]["name"], "Asia")
+        await http.aclose()
+
+    async def test_skport_gacha_token_and_records_stay_on_global_hosts(self):
+        requests = []
+
+        async def handler(request: httpx.Request):
+            requests.append(request)
+            if request.url.host == "as.gryphline.com":
+                return httpx.Response(200, json={"status": 0, "data": {"token": "oauth"}})
+            if request.url.host == "binding-api-account-prod.gryphline.com":
+                return httpx.Response(200, json={"status": 0, "data": {"token": "u8-global"}})
+            if request.url.path == "/api/record/char":
+                return httpx.Response(200, json={"code": 0, "data": {"list": []}})
+            raise AssertionError(str(request.url))
+
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client = client_module.EndfieldOfficialClient(http)
+        credential = client_module.encode_account_credential(
+            "global-account-token", client_module.ACCOUNT_PROVIDER_SKPORT
+        )
+        scoped_u8 = await client.get_u8_token(credential, "binding-global")
+        await client.character_records(mock.Mock(role_id="role", server_id="2"), scoped_u8, "special")
+
+        self.assertEqual(
+            client_module.decode_service_token(scoped_u8),
+            (client_module.ACCOUNT_PROVIDER_SKPORT, "u8-global"),
+        )
+        self.assertEqual(
+            [request.url.host for request in requests],
+            [
+                "as.gryphline.com",
+                "binding-api-account-prod.gryphline.com",
+                "ef-webview.gryphline.com",
+            ],
+        )
+        await http.aclose()
+
+    async def test_skport_currency_query_fails_before_contacting_cn_service(self):
+        http = mock.AsyncMock()
+        client = client_module.EndfieldOfficialClient(http)
+        credential = client_module.encode_account_credential(
+            "global-account-token", client_module.ACCOUNT_PROVIDER_SKPORT
+        )
+        with self.assertRaises(client_module.EndfieldAPIError):
+            await client.currency_balances(credential, mock.Mock())
+        http.request.assert_not_awaited()
 
     async def test_attendance_reads_object_award_ids(self):
         client = client_module.EndfieldOfficialClient(mock.AsyncMock())
@@ -1635,6 +1889,34 @@ class EndfieldGachaServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(result.failed)
         self.assertEqual(fake.weapon_calls, [("", "", "")])
+
+    async def test_skport_sync_fetches_each_required_weapon_pool(self):
+        credential = client_module.encode_account_credential(
+            "global-token", client_module.ACCOUNT_PROVIDER_SKPORT
+        )
+        global_role = self.store.bind_roles(
+            "global-qq",
+            credential,
+            [store_module.RoleCandidate("global-bind", "global-role", "2", "亚服角色", "Asia")],
+            self.cipher,
+        )[0]
+        fake = _FakeGachaClient()
+        fake.weapon_pools = mock.AsyncMock(return_value=[
+            ("weapon-1", "武器池一"),
+            ("weapon-2", "武器池二"),
+        ])
+        service = gacha_module.EndfieldGachaService(self.store, fake, self.cipher)
+
+        result = await service.sync(global_role, full=True)
+
+        self.assertFalse(result.failed)
+        self.assertEqual(
+            sorted(fake.weapon_calls),
+            [
+                ("weapon-1", "武器池一", ""),
+                ("weapon-2", "武器池二", ""),
+            ],
+        )
 
     async def test_task_registry_rejects_duplicate_role(self):
         entered = asyncio.Event()

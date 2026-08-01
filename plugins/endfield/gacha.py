@@ -9,7 +9,13 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Awaitable, Callable, Iterable
 
-from .account_client import CHARACTER_POOL_TYPES, EndfieldAPIError, EndfieldOfficialClient
+from .account_client import (
+    ACCOUNT_PROVIDER_SKPORT,
+    CHARACTER_POOL_TYPES,
+    EndfieldAPIError,
+    EndfieldOfficialClient,
+    decode_account_credential,
+)
 from .account_crypto import CredentialCipher
 from .account_store import EndfieldRole, EndfieldStore, GachaRecord, XhhGachaImport, XhhGachaPool, XhhSixStar
 from .gacha_assets import GachaItemMetadata, GachaPoolBanner, GachaPoolRule, apply_gacha_metadata
@@ -195,6 +201,7 @@ class EndfieldGachaService:
     ) -> SyncResult:
         async with ROLE_TASKS.claim(role):
             account_token = self.store.decrypt_token(role, self.cipher)
+            provider, _raw_account_token = decode_account_credential(account_token)
             u8_token = await self.client.get_u8_token(account_token, role.binding_uid)
             character_names = await self.client.character_pool_names(u8_token, role.server_id)
             semaphore = asyncio.Semaphore(3)
@@ -209,12 +216,24 @@ class EndfieldGachaService:
                         ),
                     )
                 )
-            jobs.append(
-                self._sync_stream(
-                    role, "weapon:all", "武器申领", full, semaphore,
-                    lambda cursor: self.client.weapon_records(role, u8_token, seq_id=cursor),
+            if provider == ACCOUNT_PROVIDER_SKPORT:
+                weapon_pools = await self.client.weapon_pools(u8_token, role.server_id)
+                for pool_id, pool_name in weapon_pools:
+                    jobs.append(
+                        self._sync_stream(
+                            role, f"weapon:{pool_id}", pool_name or pool_id, full, semaphore,
+                            lambda cursor, pool_id=pool_id, pool_name=pool_name: self.client.weapon_records(
+                                role, u8_token, pool_id, seq_id=cursor, pool_name=pool_name
+                            ),
+                        )
+                    )
+            else:
+                jobs.append(
+                    self._sync_stream(
+                        role, "weapon:all", "武器申领", full, semaphore,
+                        lambda cursor: self.client.weapon_records(role, u8_token, seq_id=cursor),
+                    )
                 )
-            )
             results = tuple(await asyncio.gather(*jobs))
             return SyncResult(role, results, full, int(time.time()))
 

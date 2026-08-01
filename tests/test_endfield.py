@@ -2078,6 +2078,43 @@ class EndfieldServiceTests(unittest.TestCase):
         potential = next(effect for effect in view.effects if effect.source == "干员 · 观海")
         self.assertTrue(potential.active)
 
+    def test_loadout_does_not_treat_triggered_extra_damage_as_attack_percent(self):
+        baseline = build_fz_loadout_view(
+            _sample_loadout_operator(),
+            _sample_loadout_weapon(),
+            [],
+            operator_potential=1,
+        )
+        operator = copy.deepcopy(_sample_loadout_operator())
+        attrs = operator["revision"]["contentJson"]["content"][0]["attrs"]
+        attrs["potentials"] = {
+            "potentials": [
+                {
+                    "name": "守墓人之赠",
+                    "level": 1,
+                    "desc": (
+                        "受到<@ba.key>低温灌注</>的主控干员，<#ba.lastcombo>重击</>"
+                        "命中敌人时额外造成<@ba.vup>{atk_up:0%}</>伤害和"
+                        "<@ba.vup>{poise:0}</>点失衡。"
+                    ),
+                    "values": {"poise": 5.0, "atk_up": 0.2, "potential_1": 1.0},
+                }
+            ]
+        }
+
+        view = build_fz_loadout_view(
+            operator,
+            _sample_loadout_weapon(),
+            [],
+            operator_potential=1,
+        )
+
+        baseline_attack = next(row.value for row in baseline.primary_stats if row.key == "Atk")
+        attack = next(row.value for row in view.primary_stats if row.key == "Atk")
+        self.assertEqual(attack, baseline_attack)
+        potential = next(effect for effect in view.effects if effect.source == "干员 · 守墓人之赠")
+        self.assertFalse(potential.active)
+
     def test_loadout_applies_only_unlocked_operator_potentials(self):
         operator = copy.deepcopy(_sample_loadout_operator())
         attrs = operator["revision"]["contentJson"]["content"][0]["attrs"]

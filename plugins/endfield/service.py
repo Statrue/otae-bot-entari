@@ -1413,7 +1413,8 @@ def _loadout_clause_is_triggered(clause: str) -> bool:
     return bool(
         re.search(
             r"(?:当|每|若|如果|期间|时[，,]|后[，,使]|根据|使(?:其他队友|敌人)|装备者施加|装备者造成|"
-            r"对.+(?:敌人|目标)|(?:连携技|终结技|战技|普通攻击).+的|所需)",
+            r"对.+(?:敌人|目标)|(?:命中|击中|施放|释放|消耗|触发|使用|进入|离开).{0,32}?时(?!间)|"
+            r"(?:连携技|终结技|战技|普通攻击).+的|所需)",
             plain,
         )
     )
@@ -1421,10 +1422,16 @@ def _loadout_clause_is_triggered(clause: str) -> bool:
 
 def _loadout_effect_target(key: str, clause: str, *, allow_label_fallback: bool) -> str:
     lowered = _alias_key(key).lower()
+    plain = _clean_fz_rich_text(clause)
     if lowered == "dmg_taken_down":
         return "AllDamageTakenScalar"
     target = LOADOUT_EFFECT_KEY_TARGETS.get(lowered)
     if target:
+        # FZ data also uses names such as ``atk_up`` for skill damage ratios.
+        # Only treat those ambiguous keys as a panel attack bonus when the
+        # rendered description explicitly says 攻击力.
+        if target == "AtkPercent" and "攻击力" not in plain:
+            return ""
         return target
     if any(token in lowered for token in ("duration", "time", "count", "cost", "stack", "limit", "interval", "cooldown")):
         return ""
@@ -1445,7 +1452,6 @@ def _loadout_effect_target(key: str, clause: str, *, allow_label_fallback: bool)
         return "AtkPercent"
     if not allow_label_fallback:
         return ""
-    plain = _clean_fz_rich_text(clause)
     label_targets = (
         ("暴击伤害", "CriticalDamageIncrease"),
         ("暴击率", "CriticalRate"),

@@ -476,10 +476,34 @@ class EndfieldOfficialClient:
         oauth_code = await self._oauth_token(
             account_token, config.community_app_code, grant_type=0, field="code"
         )
-        credential_payload = await self._json_request(
-            "获取社区凭据", "POST", f"{config.community_base}{config.credential_path}",
-            json_body={"code": oauth_code, "kind": 1},
-        )
+        try:
+            credential_payload = await self._json_request(
+                "获取社区凭据", "POST", f"{config.community_base}{config.credential_path}",
+                json_body={"code": oauth_code, "kind": 1},
+            )
+        except EndfieldAPIError as exc:
+            if provider != ACCOUNT_PROVIDER_SKPORT or exc.code != "404":
+                raise
+            # SKPORT currently selects /web or /api according to its runtime.
+            # OAuth codes are single-use, so obtain a fresh code before falling back.
+            oauth_code = await self._oauth_token(
+                account_token, config.community_app_code, grant_type=0, field="code"
+            )
+            try:
+                credential_payload = await self._json_request(
+                    "获取社区凭据",
+                    "POST",
+                    f"{config.community_base}/api/v1/user/auth/generate_cred_by_code",
+                    json_body={"code": oauth_code, "kind": 1},
+                )
+            except EndfieldAPIError as fallback_exc:
+                if fallback_exc.code == "404":
+                    raise EndfieldAPIError(
+                        "验证 SKPORT Token",
+                        code="404",
+                        message="Token 已失效，请重新登录 SKPORT 后获取",
+                    ) from None
+                raise
         cred = str((credential_payload.get("data") or {}).get("cred") or "")
         if not cred:
             raise EndfieldAPIError("获取社区凭据", message="官方接口未返回 cred")

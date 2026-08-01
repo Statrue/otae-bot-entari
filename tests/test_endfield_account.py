@@ -1208,6 +1208,55 @@ class EndfieldOfficialClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(detail["base"]["name"], "Asia")
         await http.aclose()
 
+    async def test_skport_credential_falls_back_from_web_to_api_with_fresh_oauth_code(self):
+        requests: list[httpx.Request] = []
+        grant_count = 0
+
+        async def handler(request: httpx.Request):
+            nonlocal grant_count
+            requests.append(request)
+            if request.url.host == "as.gryphline.com":
+                grant_count += 1
+                return httpx.Response(200, json={
+                    "status": 0,
+                    "data": {"code": f"oauth-code-{grant_count}"},
+                })
+            if request.url.path == "/web/v1/user/auth/generate_cred_by_code":
+                return httpx.Response(200, json={"code": 404, "message": "Not Found"})
+            if request.url.path == "/api/v1/user/auth/generate_cred_by_code":
+                self.assertEqual(json.loads(request.content)["code"], "oauth-code-2")
+                return httpx.Response(200, json={"code": 0, "data": {"cred": "global-cred"}})
+            if request.url.path == "/web/v1/auth/refresh":
+                return httpx.Response(200, json={
+                    "code": 0,
+                    "timestamp": 1000,
+                    "data": {"salt": "global-salt"},
+                })
+            raise AssertionError(str(request.url))
+
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client = client_module.EndfieldOfficialClient(http)
+        credential = client_module.encode_account_credential(
+            "global-account-token", client_module.ACCOUNT_PROVIDER_SKPORT
+        )
+
+        with mock.patch.object(client_module.time, "time", return_value=1000):
+            context = await client._skland_context(credential)
+
+        self.assertEqual((context.cred, context.sign_token), ("global-cred", "global-salt"))
+        self.assertEqual(grant_count, 2)
+        self.assertEqual(
+            [request.url.path for request in requests],
+            [
+                "/user/oauth2/v2/grant",
+                "/web/v1/user/auth/generate_cred_by_code",
+                "/user/oauth2/v2/grant",
+                "/api/v1/user/auth/generate_cred_by_code",
+                "/web/v1/auth/refresh",
+            ],
+        )
+        await http.aclose()
+
     async def test_skport_gacha_token_and_records_stay_on_global_hosts(self):
         requests = []
 

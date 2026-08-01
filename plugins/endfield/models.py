@@ -441,6 +441,7 @@ class MedalProgressView:
     level: int = 0
     plated: bool = False
     init_level: int = 0       # achievementData.initLevel：用于校正森空岛 level 偏移（initLevel>1 时）
+    plated_icon: str = ""     # achievementData.platedIcon：镀层后图标（未镀层双卡右卡用）
 
 
 @dataclass(slots=True)

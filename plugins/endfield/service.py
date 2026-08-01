@@ -544,7 +544,10 @@ class EndfieldService:
                 not_plated.append(replace(
                     medal,
                     description=_tier_text(medal.tier_desc, medal.max_level, medal.description),
-                    condition=medal.plate_condition or _tier_text(medal.tier_cond, medal.max_level),
+                    condition=_tier_text(medal.tier_cond, medal.max_level),
+                    next_description="",
+                    next_condition=medal.plate_condition or "",
+                    next_icon_url=info.plated_icon or "",
                 ))
         not_obtained_count = len(not_obtained)
         not_maxed_count = len(not_maxed)
@@ -2495,6 +2498,7 @@ def _parse_player_medal_progress(
             level=_to_int(item.get("level")),
             plated=plated,
             init_level=init_level,
+            plated_icon=_first_text(meta, "platedIcon") or "",
         )
         if hex_id:
             by_hex[hex_id] = view

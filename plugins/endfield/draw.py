@@ -934,13 +934,14 @@ def _medal_upgrade_html(medal: MedalItemView, icon_map: dict[str, str]) -> str:
         meta_parts.append('<span class="tag plate">可镀层</span>')
     meta = f'<div class="medal-meta">{"".join(meta_parts)}</div>' if meta_parts else ""
     cat_meta = f'<div class="medal-meta"><span class="cat">{esc(medal.category_name)}</span></div>' if medal.category_name else ""
+    nd = f'<div class="medal-desc">{esc(medal.next_description)}</div>' if medal.next_description else ""
+    nc = f'<div class="medal-cond">{esc(medal.next_condition)}</div>' if medal.next_condition else ""
     return (
         '<div class="medal-upgrade">'
         f'<div class="medal-card">{cur_icon}<div class="medal-info"><strong>{esc(medal.name)}</strong>{meta}'
         f'<div class="medal-desc">{esc(medal.description)}</div><div class="medal-cond">{esc(medal.condition)}</div></div></div>'
         '<div class="medal-arrow">→</div>'
-        f'<div class="medal-card">{next_icon}<div class="medal-info"><strong>{esc(medal.name)}</strong>{cat_meta}'
-        f'<div class="medal-desc">{esc(medal.next_description)}</div><div class="medal-cond">{esc(medal.next_condition)}</div></div></div>'
+        f'<div class="medal-card">{next_icon}<div class="medal-info"><strong>{esc(medal.name)}</strong>{cat_meta}{nd}{nc}</div></div>'
         '</div>'
     )
 
@@ -950,6 +951,7 @@ async def draw_medal_missing_card(view: MedalMissingView) -> tuple[bytes, ...]:
     all_medals = [*view.not_obtained, *view.not_maxed, *view.not_plated]
     _icon_urls = [m.icon_url for m in all_medals if m.icon_url]
     _icon_urls += [m.next_icon_url for m in view.not_maxed if m.next_icon_url]
+    _icon_urls += [m.next_icon_url for m in view.not_plated if m.next_icon_url]
     icon_map = await _image_data_urls(_icon_urls)
     sections: list[str] = []
     if view.not_obtained:
@@ -957,7 +959,7 @@ async def draw_medal_missing_card(view: MedalMissingView) -> tuple[bytes, ...]:
     if view.not_maxed:
         sections.append(_medal_section_html("未升满", view.not_maxed, icon_map, force_single=True, count=view.not_maxed_count))
     if view.not_plated:
-        sections.append(_medal_section_html("未镀层", view.not_plated, icon_map, force_double=True, count=view.not_plated_count))
+        sections.append(_medal_section_html("未镀层", view.not_plated, icon_map, force_single=True, count=view.not_plated_count))
     if not sections:
         sections.append('<div class="empty">统计口径内未发现缺漏，蚀刻章已全部集齐。</div>')
     notice = (
@@ -966,7 +968,7 @@ async def draw_medal_missing_card(view: MedalMissingView) -> tuple[bytes, ...]:
     )
     stats = _medal_stats_block(
         "已拥有", view.owned_count, view.level_counts,
-        [("版本总数", view.total_count), ("未获得", view.not_obtained_count), ("未升满", view.not_maxed_count)],
+        [("版本总数", view.total_count), ("未获得", view.not_obtained_count), ("未升满", view.not_maxed_count), ("未镀层", view.not_plated_count)],
     )
     body = f"""
     <header><div><small>ENDFIELD / MEDAL MISSING</small><h1>蚀刻章缺章</h1><p>{esc(view.nickname)} · {esc(view.server_name)} · {esc(view.uid)}</p></div></header>

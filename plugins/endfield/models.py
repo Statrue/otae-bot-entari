@@ -388,6 +388,13 @@ class MedalItemView:
     order: int = 0
     icon_url: str = ""
     description: str = ""
+    condition: str = ""
+    plate_condition: str = ""
+    tier_desc: dict[int, str] = field(default_factory=dict)
+    tier_cond: dict[int, str] = field(default_factory=dict)
+    next_description: str = ""
+    next_condition: str = ""
+    next_icon_url: str = ""
 
 
 @dataclass(slots=True)
@@ -448,6 +455,9 @@ class MedalMissingView:
     not_obtained: list[MedalItemView] = field(default_factory=list)
     not_maxed: list[MedalItemView] = field(default_factory=list)
     not_plated: list[MedalItemView] = field(default_factory=list)
+    not_obtained_count: int = 0       # 截断前的真实未获得总数（统计区用，非显示条目数）
+    not_maxed_count: int = 0          # 截断前的真实未升满总数
+    not_plated_count: int = 0         # 截断前的真实未镀层总数
     truncated: bool = False
     shown_count: int = 0
     level_counts: dict[int, int] = field(default_factory=dict)

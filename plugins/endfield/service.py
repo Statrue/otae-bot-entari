@@ -5,6 +5,7 @@ import hashlib
 import math
 import re
 import time
+from dataclasses import replace
 from typing import Any, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
@@ -519,18 +520,38 @@ class EndfieldService:
             if info is None and medal.name:  # 兜底：FZ 条目无 achv_ id 时按 name
                 info = progress_by_name.get(_norm_medal_name(medal.name))
             if info is None:
-                not_obtained.append(medal)
+                init_lv = medal.init_level or 1
+                not_obtained.append(replace(
+                    medal,
+                    icon_url=f"{AKEDATA_ICON_BASE}/{medal.medal_id}_lv{init_lv:02d}.png",
+                ))
                 continue
             offset = info.init_level - 1 if info.init_level > 0 else 0
             real_level = info.level + offset
             owned_level_counts[real_level] = owned_level_counts.get(real_level, 0) + 1
             if medal.can_be_upgraded and real_level < medal.max_level:
-                not_maxed.append(medal)
+                target = real_level + 1
+                not_maxed.append(replace(
+                    medal,
+                    icon_url=f"{AKEDATA_ICON_BASE}/{medal.medal_id}_lv{real_level:02d}.png",
+                    description=_tier_text(medal.tier_desc, real_level, medal.description),
+                    condition=_tier_text(medal.tier_cond, real_level, medal.condition),
+                    next_description=_tier_text(medal.tier_desc, target),
+                    next_condition=_tier_text(medal.tier_cond, target),
+                    next_icon_url=f"{AKEDATA_ICON_BASE}/{medal.medal_id}_lv{target:02d}.png",
+                ))
             if medal.can_be_plated and not info.plated:
-                not_plated.append(medal)
-        owned_count = snapshot.total_count - len(not_obtained)
+                not_plated.append(replace(
+                    medal,
+                    description=_tier_text(medal.tier_desc, medal.max_level, medal.description),
+                    condition=medal.plate_condition or _tier_text(medal.tier_cond, medal.max_level),
+                ))
+        not_obtained_count = len(not_obtained)
+        not_maxed_count = len(not_maxed)
+        not_plated_count = len(not_plated)
+        owned_count = snapshot.total_count - not_obtained_count
         truncated = False
-        if len(not_obtained) + len(not_maxed) + len(not_plated) > limit:
+        if not_obtained_count + not_maxed_count + not_plated_count > limit:
             truncated = True
             per = max(1, limit // 3)
             not_obtained = not_obtained[:per]
@@ -546,6 +567,9 @@ class EndfieldService:
             not_obtained=not_obtained,
             not_maxed=not_maxed,
             not_plated=not_plated,
+            not_obtained_count=not_obtained_count,
+            not_maxed_count=not_maxed_count,
+            not_plated_count=not_plated_count,
             truncated=truncated,
             shown_count=len(not_obtained) + len(not_maxed) + len(not_plated),
             level_counts=owned_level_counts,
@@ -2578,6 +2602,11 @@ def _i18n_text(i18n: dict[str, Any], obj: Any) -> str:
     return ""
 
 
+def _tier_text(d: dict, lv, default: str = "") -> str:
+    """按等级取档位文本，兼容 int/str key（snapshot JSON round-trip 后 key 为 str）。"""
+    return d.get(lv) or d.get(str(lv)) or default
+
+
 def build_akedata_medal_snapshot(
     achievement_table: dict[str, Any],
     type_table: dict[str, Any],
@@ -2618,16 +2647,39 @@ def build_akedata_medal_snapshot(
             str(entry.get("groupId") or ""), (999, "", "")
         )
         level_infos = entry.get("levelInfos") or {}
-        achieve_levels = sorted(
-            level
-            for level in (
-                _to_int((li or {}).get("achieveLevel")) if isinstance(li, dict) else 0
-                for li in level_infos.values()
-            )
-            if level > 0
-        )
+        achieve_levels: list[int] = []
+        tier_desc: dict[int, str] = {}
+        tier_cond: dict[int, str] = {}
+        for li in level_infos.values():
+            if not isinstance(li, dict):
+                continue
+            al = _to_int(li.get("achieveLevel"))
+            if al <= 0:
+                continue
+            achieve_levels.append(al)
+            tier_desc[al] = _i18n_text(i18n, li.get("completeDesc"))
+            seen: set[str] = set()
+            cond_texts: list[str] = []
+            for c in li.get("conditions") or []:
+                if not isinstance(c, dict):
+                    continue
+                t = _i18n_text(i18n, c.get("desc"))
+                if t and t not in seen:
+                    seen.add(t)
+                    cond_texts.append(t)
+            tier_cond[al] = "；".join(cond_texts)
+        achieve_levels.sort()
         init_level = _to_int(entry.get("initLevel")) or (achieve_levels[0] if achieve_levels else 0)
         max_level = achieve_levels[-1] if achieve_levels else (init_level or 1)
+        plate_seen: set[str] = set()
+        plate_texts: list[str] = []
+        for c in entry.get("plateConditions") or []:
+            if not isinstance(c, dict):
+                continue
+            t = _i18n_text(i18n, c.get("desc"))
+            if t and t not in plate_seen:
+                plate_seen.add(t)
+                plate_texts.append(t)
         medals.append(
             MedalItemView(
                 medal_id=achv_id,
@@ -2640,7 +2692,11 @@ def build_akedata_medal_snapshot(
                 can_be_plated=bool(entry.get("canBePlated")),
                 order=_to_int(entry.get("order")),
                 icon_url=f"{AKEDATA_ICON_BASE}/{achv_id}_lv{max_level:02d}.png",
-                description=_i18n_text(i18n, entry.get("desc")),
+                description=_tier_text(tier_desc, init_level),
+                condition=_tier_text(tier_cond, init_level),
+                plate_condition="；".join(plate_texts),
+                tier_desc=tier_desc,
+                tier_cond=tier_cond,
             )
         )
 

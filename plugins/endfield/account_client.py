@@ -473,6 +473,7 @@ class EndfieldOfficialClient:
         cached = self._skland_cache.get(key)
         if cached and not refresh and cached.expires_at > time.monotonic():
             return cached
+        cred = ""
         oauth_code = await self._oauth_token(
             account_token, config.community_app_code, grant_type=0, field="code"
         )
@@ -485,7 +486,7 @@ class EndfieldOfficialClient:
             if provider != ACCOUNT_PROVIDER_SKPORT or exc.code != "404":
                 raise
             # SKPORT currently selects /web or /api according to its runtime.
-            # OAuth codes are single-use, so obtain a fresh code before falling back.
+            # OAuth codes are single-use, so obtain a fresh code before retrying.
             oauth_code = await self._oauth_token(
                 account_token, config.community_app_code, grant_type=0, field="code"
             )
@@ -497,16 +498,15 @@ class EndfieldOfficialClient:
                     json_body={"code": oauth_code, "kind": 1},
                 )
             except EndfieldAPIError as fallback_exc:
-                if fallback_exc.code == "404":
-                    raise EndfieldAPIError(
-                        "验证 SKPORT Token",
-                        code="404",
-                        message="Token 已失效，请重新登录 SKPORT 后获取",
-                    ) from None
-                raise
-        cred = str((credential_payload.get("data") or {}).get("cred") or "")
+                if fallback_exc.code != "404":
+                    raise
+                # Current third-party SKPORT clients use the OAuth code itself as
+                # cred when the credential-exchange route is unavailable.
+                cred = oauth_code
         if not cred:
-            raise EndfieldAPIError("获取社区凭据", message="官方接口未返回 cred")
+            cred = str((credential_payload.get("data") or {}).get("cred") or "")
+            if not cred:
+                raise EndfieldAPIError("获取社区凭据", message="官方接口未返回 cred")
         refresh_payload = await self._json_request(
             "刷新社区签名", "GET", f"{config.community_base}/web/v1/auth/refresh", headers={"cred": cred}
         )

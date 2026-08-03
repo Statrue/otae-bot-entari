@@ -15,7 +15,7 @@ from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 from time import perf_counter
-from typing import Iterable
+from typing import Any, Iterable
 
 import cv2
 import numpy as np
@@ -47,6 +47,10 @@ from .models import (
     WeaponCatalogItemView,
     WeaponCatalogView,
     WeaponView,
+    MedalDiffView,
+    MedalItemView,
+    MedalMissingView,
+    MedalSnapshotView,
 )
 from .gacha import (
     FreePullBatch,
@@ -789,6 +793,301 @@ async def _draw_neutral_card(selector: str, body: str, *, extra_css: str = "") -
         return await run_image_render(optimize_png_container, output)
     finally:
         schedule_temp_file_cleanup(html_path, delay_seconds=30)
+
+
+# ===== 蚀刻章/奖章（F1 版本对比）渲染 =====
+
+MEDAL_PAGE_BUDGETS: tuple[int, ...] = (56, 40, 28, 18)
+MEDAL_DOUBLE_COLUMN_MIN = 6  # 单个列表条目 ≥ 此值时启用双列，压缩卡片高度（F1 新增列表 / F2 各缺章分组）
+MEDAL_CARD_CSS = """
+.medal-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+.medal-stats--rows{display:flex;flex-direction:column}
+.medal-row{display:flex;gap:10px}
+.medal-stats .tile{flex:1;display:flex;align-items:center;justify-content:center;gap:10px;padding:14px;border:1px solid #999;background:#fff}
+.medal-stats .tile span{color:#1f1f1f;font-size:16px;font-weight:700}
+.medal-stats .tile strong{font-size:26px;line-height:1;font-weight:900;color:#222}
+.medal-stats .tile.primary{border:3px solid #222}
+.medal-stats .lv-tile{flex:1;display:flex;align-items:center;justify-content:center;gap:10px;padding:8px;border:1px solid #999;background:#fff}
+.medal-stats .lv-tile strong{margin:0;font-size:26px;line-height:1;font-weight:900;color:#222}
+.medal-stats .lv-tile .grade-icon{width:40px;height:40px;object-fit:contain}
+.medal-section{margin-top:6px}.medal-section h2{margin:0 0 10px;font-size:22px}
+.medal-list{display:grid;gap:8px}.medal-list--double{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.medal-item{display:grid;grid-template-columns:80px minmax(0,1fr);gap:12px;align-items:center;padding:8px 10px;border:1px solid #888;background:#fff}
+.medal-icon{width:80px;height:80px;display:grid;place-items:center;overflow:hidden}
+.medal-upgrade{display:flex;align-items:stretch;gap:8px;padding:8px 10px;border:1px solid #888;background:#fff}
+.medal-upgrade .medal-card{flex:1;display:grid;grid-template-columns:80px minmax(0,1fr);gap:12px;align-items:center;min-width:0}
+.medal-upgrade .medal-arrow{flex:none;display:grid;place-items:center;color:#c9a227;font-size:30px;font-weight:900;line-height:1;padding:0 2px}
+.medal-icon img{width:100%;height:100%;object-fit:contain}.medal-icon .no-icon{color:#999;font-size:11px}
+.medal-info strong{font-size:16px}
+.medal-meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px}
+.medal-meta .cat{color:#666;font-size:12px}
+.medal-meta .lv,.medal-meta .tag{padding:1px 7px;border:1px solid #444;font-size:11px;font-weight:800;line-height:1.6}
+.medal-meta .lv{background:#222;color:#fff}
+.medal-meta .tag.up{background:#eef;border-color:#446}.medal-meta .tag.plate{background:#fee;border-color:#944}
+.medal-desc{margin-top:4px;color:#1e2b3c;font-size:13px;line-height:1.5;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}.medal-cond{margin-top:4px;color:#5b6f86;font-size:12px;line-height:1.5;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}.medal-next{margin-top:6px;padding-top:5px;border-top:1px dashed #c5ccd4}.medal-next-tag{display:inline-block;color:#9aa3ad;font-size:11px;font-weight:700;margin-bottom:2px}
+.medal-source{display:flex;justify-content:space-between;gap:16px;margin-top:14px;padding-top:10px;border-top:2px solid #222;color:#777;font-size:12px;font-weight:800}
+.medal-levelbar{display:flex;gap:10px;margin-bottom:14px}.medal-levelbar .lv-cell{flex:1;display:flex;align-items:center;justify-content:center;gap:12px;padding:12px 14px;border:1px solid #999;background:#fff}.medal-levelbar .lv-cell strong{font-size:32px;line-height:1;font-weight:900;color:#222}.medal-levelbar .grade-icon{display:inline-block;width:48px;height:48px;flex-shrink:0;object-fit:contain}
+"""
+
+
+async def draw_medal_stats_card(view: MedalDiffView) -> tuple[bytes, ...]:
+    """F1：蚀刻章总数 + 相较上版本新增奖章详情；过高自动分页。"""
+    new_medals = view.new_medals
+    if not new_medals:
+        return (await _draw_medal_stats_page(view, [], 1, 1),)
+
+    try:
+        return (await _draw_medal_stats_page(view, new_medals, 1, 1),)
+    except RuntimeError as exc:
+        if not _is_gacha_height_limit_error(exc):
+            raise
+
+    last_error: RuntimeError | None = None
+    for budget in MEDAL_PAGE_BUDGETS:
+        chunks = [new_medals[i:i + budget] for i in range(0, len(new_medals), budget)]
+        pages: list[bytes] = []
+        try:
+            for index, chunk in enumerate(chunks):
+                pages.append(await _draw_medal_stats_page(view, chunk, index + 1, len(chunks)))
+        except RuntimeError as exc:
+            if not _is_gacha_height_limit_error(exc):
+                raise
+            last_error = exc
+            continue
+        logger.info(f"[endfield] medal stats paginated pages={len(pages)} budget={budget}")
+        return tuple(pages)
+    raise last_error or RuntimeError("蚀刻章统计分页失败")
+
+
+async def _draw_medal_stats_page(
+    view: MedalDiffView,
+    medals: list[MedalItemView],
+    page_number: int,
+    page_count: int,
+) -> bytes:
+    current = view.current
+    icon_map = await _image_data_urls([medal.icon_url for medal in medals if medal.icon_url])
+    new_total = len(view.new_medals)
+    stats = _medal_stats_block(
+        "蚀刻章总数", current.total_count, current.level_counts,
+        [("可镀层", current.platable_count), ("可升级", current.upgradable_count), ("本版本新增", new_total)],
+    )
+    page_tag = f" · 第 {page_number}/{page_count} 页" if page_count > 1 else ""
+    medal_html = (
+        "".join(_medal_item_html(medal, icon_map) for medal in medals)
+        if medals
+        else '<div class="empty">暂无新增蚀刻章（暂无更早版本可对比或本版本无新增）</div>'
+    )
+    body = f"""
+    <header><div><small>ENDFIELD / MEDAL ARCHIVE</small><h1>蚀刻章统计</h1><p>游戏版本 {esc(current.version)}{page_tag}</p></div></header>
+    <main>
+      {stats}
+      <section class="medal-section">
+        <h2>新增蚀刻章（本页 {len(medals)}）</h2>
+        <div class="medal-list{' medal-list--double' if len(medals) >= MEDAL_DOUBLE_COLUMN_MIN else ''}">{medal_html}</div>
+      </section>
+      <footer class="medal-source"><span>数据来源 AKEData</span><span>版本 {esc(current.version)} · 共 {current.total_count} 枚</span></footer>
+    </main>
+    """
+    return await _draw_neutral_card("medal-stats-card", body, extra_css=MEDAL_CARD_CSS)
+
+
+def _medal_item_html(medal: MedalItemView, icon_map: dict[str, str]) -> str:
+    data_url = icon_map.get(medal.icon_url, "")
+    if data_url:
+        icon = f'<div class="medal-icon"><img src="{esc_attr(data_url)}" alt=""></div>'
+    else:
+        icon = '<div class="medal-icon"><span class="no-icon">无图</span></div>'
+    meta_parts = []
+    if medal.category_name:
+        meta_parts.append(f'<span class="cat">{esc(medal.category_name)}</span>')
+    if medal.can_be_upgraded:
+        meta_parts.append('<span class="tag up">可升级</span>')
+    if medal.can_be_plated:
+        meta_parts.append('<span class="tag plate">可镀层</span>')
+    meta = f'<div class="medal-meta">{"".join(meta_parts)}</div>' if meta_parts else ""
+    desc = f'<div class="medal-desc">{esc(medal.description)}</div>' if medal.description else ""
+    cond = f'<div class="medal-cond">{esc(medal.condition)}</div>' if medal.condition else ""
+    next_block = ""
+    if medal.next_description or medal.next_condition:
+        nd = f'<div class="medal-desc">{esc(medal.next_description)}</div>' if medal.next_description else ""
+        nc = f'<div class="medal-cond">{esc(medal.next_condition)}</div>' if medal.next_condition else ""
+        next_block = f'<div class="medal-next"><span class="medal-next-tag">→ 升级后</span>{nd}{nc}</div>'
+    return (
+        f'<div class="medal-item">{icon}'
+        f'<div class="medal-info"><strong>{esc(medal.name)}</strong>{meta}{desc}{cond}{next_block}</div>'
+        '</div>'
+    )
+
+
+def _medal_upgrade_html(medal: MedalItemView, icon_map: dict[str, str]) -> str:
+    """未升满专用：左=已获得的当前档奖章，中间升级箭头，右=升级后奖章（各带图标+名称+类型+描述+条件）。"""
+    cur = icon_map.get(medal.icon_url, "")
+    nxt = icon_map.get(medal.next_icon_url, "")
+    cur_icon = f'<div class="medal-icon"><img src="{esc_attr(cur)}" alt=""></div>' if cur else '<div class="medal-icon"><span class="no-icon">无图</span></div>'
+    next_icon = f'<div class="medal-icon"><img src="{esc_attr(nxt)}" alt=""></div>' if nxt else '<div class="medal-icon"><span class="no-icon">无图</span></div>'
+    meta_parts = []
+    if medal.category_name:
+        meta_parts.append(f'<span class="cat">{esc(medal.category_name)}</span>')
+    if medal.can_be_upgraded:
+        meta_parts.append('<span class="tag up">可升级</span>')
+    if medal.can_be_plated:
+        meta_parts.append('<span class="tag plate">可镀层</span>')
+    meta = f'<div class="medal-meta">{"".join(meta_parts)}</div>' if meta_parts else ""
+    cat_meta = f'<div class="medal-meta"><span class="cat">{esc(medal.category_name)}</span></div>' if medal.category_name else ""
+    nd = f'<div class="medal-desc">{esc(medal.next_description)}</div>' if medal.next_description else ""
+    nc = f'<div class="medal-cond">{esc(medal.next_condition)}</div>' if medal.next_condition else ""
+    return (
+        '<div class="medal-upgrade">'
+        f'<div class="medal-card">{cur_icon}<div class="medal-info"><strong>{esc(medal.name)}</strong>{meta}'
+        f'<div class="medal-desc">{esc(medal.description)}</div><div class="medal-cond">{esc(medal.condition)}</div></div></div>'
+        '<div class="medal-arrow">→</div>'
+        f'<div class="medal-card">{next_icon}<div class="medal-info"><strong>{esc(medal.name)}</strong>{cat_meta}{nd}{nc}</div></div>'
+        '</div>'
+    )
+
+
+async def draw_medal_missing_card(view: MedalMissingView) -> tuple[bytes, ...]:
+    """F2：个人缺章（未获得/未升满/未镀层）；截断后条目数有限，单页足够。"""
+    all_medals = [*view.not_obtained, *view.not_maxed, *view.not_plated]
+    _icon_urls = [m.icon_url for m in all_medals if m.icon_url]
+    _icon_urls += [m.next_icon_url for m in view.not_maxed if m.next_icon_url]
+    _icon_urls += [m.next_icon_url for m in view.not_plated if m.next_icon_url]
+    icon_map = await _image_data_urls(_icon_urls)
+    sections: list[str] = []
+    if view.not_obtained:
+        sections.append(_medal_section_html("未获得", view.not_obtained, icon_map, force_double=True, count=view.not_obtained_count))
+    if view.not_maxed:
+        sections.append(_medal_section_html("未升满", view.not_maxed, icon_map, force_single=True, count=view.not_maxed_count))
+    if view.not_plated:
+        sections.append(_medal_section_html("未镀层", view.not_plated, icon_map, force_single=True, count=view.not_plated_count))
+    if not sections:
+        sections.append('<div class="empty">统计口径内未发现缺漏，蚀刻章已全部集齐。</div>')
+    notice = (
+        '<div class="medal-notice">未升满、未镀层仅展示部分，完整清单请在游戏内查看。</div>'
+        if view.truncated else ""
+    )
+    stats = _medal_stats_block(
+        "已拥有", view.owned_count, view.level_counts,
+        [("版本总数", view.total_count), ("未获得", view.not_obtained_count), ("未升满", view.not_maxed_count), ("未镀层", view.not_plated_count)],
+    )
+    body = f"""
+    <header><div><small>ENDFIELD / MEDAL MISSING</small><h1>蚀刻章缺章</h1><p>{esc(view.nickname)} · {esc(view.server_name)} · {esc(view.uid)}</p></div></header>
+    <main>
+      {stats}
+      {notice}
+      {''.join(sections)}
+      <footer class="medal-source"><span>进度：森空岛 SDK · 元数据：AKEData</span><span>快照版本 {esc(view.snapshot_version)} · 已展示 {view.shown_count}</span></footer>
+    </main>
+    """
+    extra = MEDAL_CARD_CSS + (
+        ".medal-notice{margin:-4px 2px 12px;padding:2px 2px;color:#888;font-size:11px}"
+    )
+    return (await _draw_neutral_card("medal-missing-card", body, extra_css=extra),)
+
+
+# 等级档位徽记：优先用三档六边形 PNG（assets/image/endfield/medal_grade_{1,2,3}.png，
+# 由 scripts/_process_medal_icon.py 从参考图/deco_medal_rare.webp 生成，对齐游戏「光荣之路」
+# 档位图标）；缺图时降级到 FZ 剪影 + CSS mask 改色（assets/image/endfield/medal_grade.png）。
+_MEDAL_GRADE_ICON_PATH = Path("assets/image/endfield/medal_grade.png")
+_MEDAL_GRADE_MASK_URL: str | None = None  # 懒加载（_local_image_data_url 定义在本文件后段）
+_MEDAL_GRADE_COLORS: dict[int, str] = {
+    1: "#6a6a6a",
+    2: "#aab0b8",
+    3: "#e3c14a",
+}
+
+
+def _medal_grade_icon(level: int) -> str:
+    """等级档位徽记：优先三档六边形 PNG；缺图降级 FZ 剪影 mask 改色。超出 1/2/3 兜底用第 3 档。"""
+    png_level = level if level in _MEDAL_GRADE_COLORS else 3
+    url = _local_image_data_url(ASSET_DIR / f"medal_grade_{png_level}.png")
+    if url:
+        return f'<img class="grade-icon" alt="{png_level}级蚀刻章" src="{url}">'
+    # 降级：FZ 剪影形状 + CSS mask 按等级变色
+    color = _MEDAL_GRADE_COLORS.get(level, "#888")
+    global _MEDAL_GRADE_MASK_URL
+    if _MEDAL_GRADE_MASK_URL is None:
+        _MEDAL_GRADE_MASK_URL = _local_image_data_url(_MEDAL_GRADE_ICON_PATH)
+    mask = _MEDAL_GRADE_MASK_URL
+    if not mask:
+        return f'<span class="grade-icon" role="img" aria-label="{level}级蚀刻章" style="background:{color}"></span>'
+    return (
+        f'<span class="grade-icon" role="img" aria-label="{level}级蚀刻章" '
+        f'style="background-color:{color};'
+        f"-webkit-mask:url('{mask}') center/contain no-repeat;"
+        f"mask:url('{mask}') center/contain no-repeat\"></span>"
+    )
+
+
+def _medal_level_bar(level_counts: dict[int, int]) -> str:
+    if not level_counts:
+        return ""
+    cells = "".join(
+        f'<div class="lv-cell">{_medal_grade_icon(lv)}<strong>{level_counts[lv]}</strong></div>'
+        for lv in sorted(level_counts, reverse=True)
+    )
+    return f'<section class="medal-levelbar">{cells}</section>'
+
+
+def _medal_stats_block(
+    primary_label: str,
+    primary_value: int,
+    level_counts: dict[int, int],
+    row2: list[tuple[str, int]],
+) -> str:
+    """统计区。
+    row2 项数与首行(primary+三档 icon=4)一致时用 4 列网格平铺，两行共享列模板、纵向严格对齐；
+    否则退回两行 flex（首行 primary+三档、次行 row2 等宽填满），避免次行留空（F1 版本对比）。
+    """
+    primary = (
+        f'<div class="tile primary"><span>{esc(primary_label)}</span>'
+        f'<strong>{primary_value}</strong></div>'
+    )
+    lv_cells = "".join(
+        f'<div class="lv-tile">{_medal_grade_icon(lv)}<strong>{level_counts.get(lv, level_counts.get(str(lv), 0))}</strong></div>'
+        for lv in (3, 2, 1)
+    )
+    row2_html = "".join(
+        f'<div class="tile"><span>{esc(label)}</span><strong>{value}</strong></div>'
+        for label, value in row2
+    )
+    if len(row2) == 4:
+        return f'<section class="medal-stats">{primary}{lv_cells}{row2_html}</section>'
+    return (
+        '<section class="medal-stats medal-stats--rows">'
+        f'<div class="medal-row">{primary}{lv_cells}</div>'
+        f'<div class="medal-row">{row2_html}</div>'
+        '</section>'
+    )
+
+
+def _medal_section_html(
+    title: str,
+    medals: list[MedalItemView],
+    icon_map: dict[str, str],
+    *,
+    force_single: bool = False,
+    force_double: bool = False,
+    count: int | None = None,
+) -> str:
+    items = "".join(
+        _medal_upgrade_html(medal, icon_map)
+        if (medal.next_description or medal.next_condition or medal.next_icon_url)
+        else _medal_item_html(medal, icon_map)
+        for medal in medals
+    )
+    if force_single:
+        double = ""
+    elif force_double:
+        double = " medal-list--double"
+    else:
+        double = " medal-list--double" if len(medals) >= MEDAL_DOUBLE_COLUMN_MIN else ""
+    shown = count if count is not None else len(medals)
+    return (
+        f'<section class="medal-section"><h2>{esc(title)}（{shown}）</h2>'
+        f'<div class="medal-list{double}">{items}</div></section>'
+    )
 
 
 async def draw_equipment_catalog_card(view: EquipmentCatalogView) -> bytes:
@@ -2230,11 +2529,24 @@ async def _prepare_assets(urls: Iterable[str], *, inline: bool) -> _PreparedAsse
     unique_urls = tuple(dict.fromkeys(str(url) for url in urls if url))
     direct = {url: url for url in unique_urls if url.startswith("data:")}
     remote_urls = [url for url in unique_urls if not url.startswith("data:")]
-    resources = await fetch_many(
-        remote_urls,
-        namespace=REMOTE_ASSET_NAMESPACE,
-        timeout_seconds=10.0,
-    )
+    # 图床（如 assets.fz.wiki）偶发超时/断连，对失败的 url 重试最多 3 轮，
+    # 已成功的走缓存命中，避免单次抖动导致渲染「无图」。
+    resources: dict[str, Any] = {}
+    pending = list(remote_urls)
+    for _ in range(3):
+        if not pending:
+            break
+        batch = await fetch_many(
+            pending,
+            namespace=REMOTE_ASSET_NAMESPACE,
+            timeout_seconds=10.0,
+        )
+        pending = [url for url, resource in batch.items() if resource is None]
+        for url, resource in batch.items():
+            if resource is not None:
+                resources[url] = resource
+    for url in pending:
+        resources[url] = None
     output = dict(direct)
     browser_resources: dict[str, BrowserResource] = {}
     contents: dict[str, bytes] = {}

@@ -1,12 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import math
 import re
+import time
+from dataclasses import replace
 from typing import Any, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
+from loguru import logger
+
 from .client import WarfarinAPIError, WarfarinClient
+from .akedata_client import (
+    AKEDATA_ICON_BASE,
+    fetch_akedata_achievement_table,
+    fetch_akedata_manifest,
+    game_version_label,
+    pick_previous_game_version,
+)
 from .commands import (
     AMBIGUITY_MARGIN,
     CLEAR_SCORE,
@@ -30,6 +42,12 @@ from .models import (
     LoadoutStatusEffectView,
     LoadoutStatusLevelView,
     LoadoutView,
+    MedalBaselineView,
+    MedalDiffView,
+    MedalItemView,
+    MedalMissingView,
+    MedalProgressView,
+    MedalSnapshotView,
     OperatorCatalogElementView,
     OperatorCatalogItemView,
     OperatorCatalogProfessionView,
@@ -60,6 +78,7 @@ WEAPON_TYPE_ORDER = {
     name: index for index, name in enumerate(("单手剑", "双手剑", "施术单元", "长柄武器", "手铳"))
 }
 STATIC_BASE = "https://static.warfarin.wiki/v4"
+_MIN_AKEDATA_MEDAL_COMPLETENESS = 0.8
 FZ_ASSET_HOST = "assets.fz.wiki"
 WEAPON_OPTIONS = ("单手剑", "双手剑", "施术单元", "长枪", "手铳")
 
@@ -371,6 +390,217 @@ class EndfieldService:
     async def get_weapon_catalog_view(self, weapon_type: str = "") -> WeaponCatalogView:
         raw = await self.client.fz_article_by_title("武器")
         return build_fz_weapon_catalog_view(raw, weapon_type)
+
+    async def fetch_medal_snapshot_fz(self, *, fetched_at: int | None = None) -> MedalSnapshotView:
+        """抓取 FZ 蚀刻章全量快照：roster（名称发现）→ 逐个详情（等级/镀层）。
+
+        并发由 ``fetch_json`` 内置信号量限流；roster 仅含名称，等级等信息在详情里，
+        故需对每枚奖章抓一次单件条目（首版约 140 次请求，结果落本地快照缓存）。
+        """
+        roster_raw = await self.client.fz_article_by_title("蚀刻章")
+        titles = [
+            _first_text(entry, "title")
+            for entry in _fz_overview_entries(roster_raw)
+            if _first_text(entry, "title")
+        ]
+        # FZ 单件页偶发超时/断连，对失败的 title 重试最多 3 轮把丢页补齐（避免快照残缺）
+        detail_raws: list[dict[str, Any]] = []
+        pending = list(titles)
+        for _ in range(3):
+            if not pending:
+                break
+            results = await asyncio.gather(
+                *(self.client.fz_article_by_title(title) for title in pending),
+                return_exceptions=True,
+            )
+            pending = [title for title, result in zip(pending, results) if isinstance(result, Exception)]
+            detail_raws.extend(result for result in results if isinstance(result, dict))
+        return build_fz_medal_snapshot_view(
+            roster_raw,
+            detail_raws,
+            fetched_at=fetched_at or int(time.time()),
+        )
+
+    async def fetch_medal_snapshot_akedata(self, *, fetched_at: int | None = None) -> MedalSnapshotView:
+        """抓取 AKEData 全量奖章快照（权威主源）。
+
+        manifest → latest 版本 → AchievementTable + AchievementTypeTable + I18nTextTable_CN，
+        聚合成快照。AKEData 的 ``achv_*`` id 与森空岛 hex 经 md5 关联，故 ``medal_id`` 直接用
+        achv_id。详见 ``docs/skland_medal_id_mapping.md``。
+        """
+        from .akedata_client import fetch_akedata_medal_tables
+
+        achievement, type_table, i18n, version = await fetch_akedata_medal_tables()
+        if not isinstance(achievement, dict) or not achievement:
+            raise ValueError("AKEData AchievementTable 为空")
+        if not isinstance(type_table, dict) or not type_table:
+            raise ValueError("AKEData AchievementTypeTable 为空")
+        if not isinstance(i18n, dict) or not i18n:
+            raise ValueError("AKEData I18nTextTable_CN 为空")
+
+        expected_count = sum(1 for entry in achievement.values() if isinstance(entry, dict))
+        snapshot = build_akedata_medal_snapshot(
+            achievement,
+            type_table,
+            i18n,
+            fetched_at=fetched_at or int(time.time()),
+            version_label=game_version_label(version),
+        )
+        if snapshot.total_count <= 0:
+            raise ValueError("AKEData 蚀刻章快照为空")
+        # A manifest can become visible before all table/i18n files are consistent.
+        # Do not replace a known-good snapshot with a silently truncated one.
+        if expected_count and snapshot.total_count < math.ceil(
+            expected_count * _MIN_AKEDATA_MEDAL_COMPLETENESS
+        ):
+            raise ValueError(
+                f"AKEData 蚀刻章快照不完整：{snapshot.total_count}/{expected_count}"
+            )
+        return snapshot
+
+    async def fetch_akedata_baseline(self, *, fetched_at: int | None = None) -> MedalBaselineView | None:
+        """抓 akedata「上一游戏版本」基线（版本对比的 previous 方，源和源）。
+
+        manifest → pick_previous_game_version → 抓其 AchievementTable（仅取 achv_id 集合）。
+        无更早游戏版本时返回 None；抓取失败会抛出异常，由调用方保留已有基线。
+        """
+        try:
+            manifest = await fetch_akedata_manifest()
+            prev = pick_previous_game_version(manifest)
+            if not prev or not prev.get("tableCfgPath"):
+                return None
+            table = await fetch_akedata_achievement_table(str(prev["tableCfgPath"]).lstrip("/"))
+            if not isinstance(table, dict) or not table:
+                raise ValueError("AKEData 历史 AchievementTable 为空")
+            ids = [aid for aid, entry in table.items() if isinstance(entry, dict)]
+            if not ids:
+                raise ValueError("AKEData 历史蚀刻章基线为空")
+            return MedalBaselineView(
+                version=game_version_label(str(prev.get("id") or "")),
+                version_id=str(prev.get("id") or ""),
+                ids=ids,
+                fetched_at=fetched_at or int(time.time()),
+            )
+        except Exception as exc:
+            logger.warning(f"[endfield] medal baseline fetch failed: {exc}")
+            raise
+
+    def build_medal_diff(
+        self,
+        current: MedalSnapshotView,
+        baseline: MedalBaselineView | None,
+    ) -> MedalDiffView:
+        """对比 current 快照与上一版本基线筛出新增奖章（id 集合差集）。
+
+        baseline 为 None（无更早版本）时无对比基线，new_medals 为空。
+        双方同为 akedata 源数据，口径一致；previous_version 用 baseline 的 major.minor。
+        """
+        if baseline is None:
+            return MedalDiffView(current=current, previous_version="", new_medals=[])
+        baseline_ids = set(baseline.ids)
+        new_medals = [
+            medal
+            for medal in current.medals
+            if medal.medal_id and medal.medal_id not in baseline_ids
+        ]
+        return MedalDiffView(
+            current=current,
+            previous_version=baseline.version,
+            new_medals=new_medals,
+        )
+
+    def build_medal_missing_view(
+        self,
+        raw_progress: dict[str, Any],
+        snapshot: MedalSnapshotView,
+        *,
+        nickname: str,
+        uid: str,
+        server_name: str,
+        limit: int = 30,
+    ) -> MedalMissingView:
+        """F2：SDK 玩家进度 × 全量快照，得出未获得 / 未升满 / 未镀层。
+
+        关联键：``md5(FZ.medal_id) == 森空岛 achievementData.id``（2026-07-28 实测 115/115），
+        比按 name 关联可靠——不受命名滞后影响（如「武陵调度专家奖章·Ⅳ/·Ⅴ」撞名）。
+        FZ 条目缺 ``achv_`` id 时回退按规范化 name（实测 FZ 单件档案均含 achv_ id，兜底基本不触发）。
+        """
+        progress_by_hex, progress_by_name = _parse_player_medal_progress(raw_progress)
+        not_obtained: list[MedalItemView] = []
+        not_maxed: list[MedalItemView] = []
+        not_plated: list[MedalItemView] = []
+        # 等级分布按账号已拥有奖章的「当前档位（颜色）」统计。
+        # 森空岛 level 对 initLevel>1 的章有偏移（如「谷地调查者奖章」initLevel=2：银记 1、金记 2），
+        # 实际档位 = skland level + initLevel - 1；否则会把 2→3 升级章误判。
+        # 详见 docs/bugfix_medal_investigator_max_tier.md。AKEData max_level 本身正确。
+        owned_level_counts: dict[int, int] = {}
+        for medal in snapshot.medals:
+            achv_id = medal.medal_id or ""
+            info = (
+                progress_by_hex.get(hashlib.md5(achv_id.encode()).hexdigest())
+                if achv_id.startswith("achv_")
+                else None
+            )
+            if info is None and medal.name:  # 兜底：FZ 条目无 achv_ id 时按 name
+                info = progress_by_name.get(_norm_medal_name(medal.name))
+            if info is None:
+                init_lv = medal.init_level or 1
+                not_obtained.append(replace(
+                    medal,
+                    icon_url=f"{AKEDATA_ICON_BASE}/{medal.medal_id}_lv{init_lv:02d}.png",
+                ))
+                continue
+            offset = info.init_level - 1 if info.init_level > 0 else 0
+            real_level = info.level + offset
+            owned_level_counts[real_level] = owned_level_counts.get(real_level, 0) + 1
+            if medal.can_be_upgraded and real_level < medal.max_level:
+                target = real_level + 1
+                not_maxed.append(replace(
+                    medal,
+                    icon_url=f"{AKEDATA_ICON_BASE}/{medal.medal_id}_lv{real_level:02d}.png",
+                    description=_tier_text(medal.tier_desc, real_level, medal.description),
+                    condition=_tier_text(medal.tier_cond, real_level, medal.condition),
+                    next_description=_tier_text(medal.tier_desc, target),
+                    next_condition=_tier_text(medal.tier_cond, target),
+                    next_icon_url=f"{AKEDATA_ICON_BASE}/{medal.medal_id}_lv{target:02d}.png",
+                ))
+            if medal.can_be_plated and not info.plated:
+                not_plated.append(replace(
+                    medal,
+                    description=_tier_text(medal.tier_desc, medal.max_level, medal.description),
+                    condition=_tier_text(medal.tier_cond, medal.max_level),
+                    next_description=_tier_text(medal.tier_desc, medal.max_level, medal.description),
+                    next_condition=medal.plate_condition or "",
+                    next_icon_url=info.plated_icon or "",
+                ))
+        not_obtained_count = len(not_obtained)
+        not_maxed_count = len(not_maxed)
+        not_plated_count = len(not_plated)
+        owned_count = snapshot.total_count - not_obtained_count
+        truncated = False
+        if not_obtained_count + not_maxed_count + not_plated_count > limit:
+            truncated = True
+            per = max(1, limit // 3)
+            not_obtained = not_obtained[:per]
+            not_maxed = not_maxed[:per]
+            not_plated = not_plated[:per]
+        return MedalMissingView(
+            nickname=nickname,
+            uid=uid,
+            server_name=server_name,
+            snapshot_version=snapshot.version,
+            total_count=snapshot.total_count,
+            owned_count=owned_count,
+            not_obtained=not_obtained,
+            not_maxed=not_maxed,
+            not_plated=not_plated,
+            not_obtained_count=not_obtained_count,
+            not_maxed_count=not_maxed_count,
+            not_plated_count=not_plated_count,
+            truncated=truncated,
+            shown_count=len(not_obtained) + len(not_maxed) + len(not_plated),
+            level_counts=owned_level_counts,
+        )
 
     async def find_weapon_operator_names(self, view: WeaponView) -> list[str]:
         try:
@@ -2208,6 +2438,322 @@ def _fz_template_attrs(raw: dict[str, Any]) -> dict[str, Any]:
         if isinstance(attrs, dict) and isinstance(attrs.get("hero"), dict):
             return attrs
     return {}
+
+
+# ----- 蚀刻章/奖章（FZ 单件模板「蚀刻章·单件档案」，数据在 attrs.entry） -----
+
+def _fz_medal_entry_attrs(raw: dict[str, Any]) -> dict[str, Any]:
+    """返回含 ``entry`` 的模板 attrs（区别于干员/装备的 ``hero``）。"""
+    content = ((raw.get("revision") or {}).get("contentJson") or {}).get("content") or []
+    for node in content:
+        if not isinstance(node, dict):
+            continue
+        attrs = node.get("attrs") or {}
+        if isinstance(attrs, dict) and isinstance(attrs.get("entry"), dict):
+            return attrs
+    return {}
+
+
+def _derive_medal_levels(entry: dict[str, Any]) -> tuple[int, bool]:
+    """从 ``entry.levels`` 推导 (max_level, can_be_upgraded)。
+
+    FZ 单件档案没有 maxLevel/canBeUpgraded 直字段，按 levels 数组推导：
+    最高等级 = levels 末项的 level（缺省回退 initLevel / len）；可升级 = levels 多于 1 级。
+    """
+    levels = _ordered_fz_levels(_unwrap_fz_list(entry.get("levels"), "levels", "items", "list"))
+    if levels:
+        max_level = _to_int(_first_value(levels[-1], "level", "lv")) or len(levels)
+        can_upgrade = len(levels) > 1
+    else:
+        max_level = _to_int(_first_value(entry, "initLevel", "level"))
+        can_upgrade = False
+    if max_level <= 0:
+        max_level = 1
+    return max_level, can_upgrade
+
+
+# ----- F2：玩家蚀刻章进度（森空岛 card/detail）归一化 -----
+
+def _norm_medal_name(name: str) -> str:
+    """规范化奖章名用于跨源关联：去全部空白 + 去首尾中英文引号。
+
+    FZ 用 ``achv_`` 语义 id、森空岛用 hex 哈希 id，命名空间不同（2026-07-27 实测），
+    无法按 id 关联；两源 name 均为中文奖章名，按规范化 name 关联（实测 135/140 命中）。
+    """
+    return (
+        "".join(str(name).split())
+        .strip('"')
+        .strip("'")
+        .strip("“”‘’")
+    )
+
+
+def _parse_player_medal_progress(
+    raw: dict[str, Any],
+) -> tuple[dict[str, MedalProgressView], dict[str, MedalProgressView]]:
+    """从森空岛 card/detail 响应提取奖章进度，返回 ``(按 hex id 索引, 按规范化 name 索引)``。
+
+    路径 ``data.detail.achieve.achieveMedals[]``；每枚含 ``achievementData.id`` /
+    ``name`` / ``level`` / ``isPlated``。只有**已获得**的奖章会出现在列表中——不在列表即未获得。
+
+    **关联键（2026-07-28 实测 115/115 命中）**：森空岛 ``achievementData.id`` 是
+    ``md5(游戏 achv_id)``（32 位 hex），与 FZ 的 ``achv_*`` 经 md5 一一对应，故**主键用 hex id**；
+    name 索引仅作兜底，用于极少数 FZ 缺 ``achv_id`` 的条目（命名滞后会使 name 关联误判，
+    详见 ``docs/skland_medal_id_mapping.md``）。
+    """
+    achieve = (((raw.get("data") or {}).get("detail") or {}).get("achieve") or {})
+    by_hex: dict[str, MedalProgressView] = {}
+    by_name: dict[str, MedalProgressView] = {}
+    for item in achieve.get("achieveMedals") or []:
+        if not isinstance(item, dict):
+            continue
+        meta = item.get("achievementData") or {}
+        name = _first_text(meta, "name")
+        hex_id = _first_text(meta, "id", "achievementId")
+        if not (name or hex_id):
+            continue
+        plated_raw = item.get("isPlated")
+        plated = plated_raw is True or (
+            isinstance(plated_raw, str) and plated_raw.strip().lower() in ("true", "1", "yes")
+        )
+        init_level = _to_int(meta.get("initLevel")) or 0
+        view = MedalProgressView(
+            medal_id=hex_id,
+            level=_to_int(item.get("level")),
+            plated=plated,
+            init_level=init_level,
+            plated_icon=_first_text(meta, "platedIcon") or "",
+        )
+        if hex_id:
+            by_hex[hex_id] = view
+        if name:
+            by_name[_norm_medal_name(name)] = view
+    return by_hex, by_name
+
+
+def build_fz_medal_item(
+    detail_raw: dict[str, Any],
+    roster_entry: dict[str, Any] | None = None,
+) -> MedalItemView | None:
+    """一条 FZ 蚀刻章详情（含 revision）→ MedalItemView；name 缺失返回 None。"""
+    attrs = _fz_medal_entry_attrs(detail_raw)
+    entry = attrs.get("entry") if isinstance(attrs.get("entry"), dict) else {}
+    roster_entry = roster_entry if isinstance(roster_entry, dict) else {}
+    name = _first_text(entry, "name") or _first_text(roster_entry, "name")
+    if not name:
+        return None
+    medal_id = _first_text(entry, "id", "medalId", "achvId") or _first_text(roster_entry, "title")
+    max_level, can_upgrade = _derive_medal_levels(entry)
+    raw_plate = _first_value(entry, "canBePlated")
+    can_be_plated = raw_plate is True or (
+        isinstance(raw_plate, str) and raw_plate.strip().lower() in ("true", "1", "yes")
+    )
+    return MedalItemView(
+        medal_id=medal_id,
+        name=name,
+        category_name=_first_text(entry, "categoryName") or _first_text(roster_entry, "categoryName"),
+        group_name=_first_text(entry, "groupName") or _first_text(roster_entry, "groupName"),
+        init_level=_to_int(_first_value(entry, "initLevel", "level")),
+        max_level=max_level,
+        can_be_upgraded=can_upgrade,
+        can_be_plated=can_be_plated,
+        order=_to_int(entry.get("order")),
+        icon_url=_fz_asset_raw_url(
+            _first_text(entry, "iconUrl", "icon") or _first_text(roster_entry, "icon")
+        ),
+        description=_clean_fz_rich_text(
+            _first_value(entry, "desc", "description") or _first_value(roster_entry, "desc")
+        ),
+    )
+
+
+def build_fz_medal_snapshot_view(
+    roster_raw: dict[str, Any],
+    detail_raws: list[dict[str, Any]],
+    *,
+    fetched_at: int = 0,
+    version_label: str | None = None,
+) -> MedalSnapshotView:
+    """聚合 FZ roster（名称发现）+ 各详情（等级/镀层）→ 全量奖章快照。"""
+    article = roster_raw.get("article") or {}
+    roster_by_title: dict[str, dict[str, Any]] = {}
+    for entry in _fz_overview_entries(roster_raw):
+        title = _first_text(entry, "title")
+        if title:
+            roster_by_title[title] = entry
+
+    medals: list[MedalItemView] = []
+    for detail in detail_raws:
+        if not isinstance(detail, dict):
+            continue
+        detail_article = detail.get("article") or {}
+        roster_entry = roster_by_title.get(_first_text(detail_article, "title"))
+        item = build_fz_medal_item(detail, roster_entry)
+        if item is not None:
+            medals.append(item)
+
+    medals.sort(key=lambda medal: (medal.category_name, medal.order, medal.name))
+
+    level_counts: dict[int, int] = {}
+    category_counts: dict[str, int] = {}
+    platable_count = 0
+    upgradable_count = 0
+    for medal in medals:
+        level_counts[medal.max_level] = level_counts.get(medal.max_level, 0) + 1
+        if medal.category_name:
+            category_counts[medal.category_name] = category_counts.get(medal.category_name, 0) + 1
+        if medal.can_be_plated:
+            platable_count += 1
+        if medal.can_be_upgraded:
+            upgradable_count += 1
+
+    return MedalSnapshotView(
+        medals=medals,
+        version=version_label or str(article.get("updatedAt") or "")[:10],
+        fetched_at=fetched_at,
+        source="fz",
+        total_count=len(medals),
+        level_counts=level_counts,
+        platable_count=platable_count,
+        upgradable_count=upgradable_count,
+        category_counts=category_counts,
+    )
+
+
+# ----- 蚀刻章/奖章（AKEData TableCfg 源：权威主源，CDN 稳定） -----
+
+
+def _i18n_text(i18n: dict[str, Any], obj: Any) -> str:
+    """``{id, text}`` → 按 text-id 在 I18nTextTable 解析出的中文文本。"""
+    if isinstance(obj, dict):
+        return str(i18n.get(str(obj.get("id"))) or "")
+    return ""
+
+
+def _tier_text(d: dict, lv, default: str = "") -> str:
+    """按等级取档位文本，兼容 int/str key（snapshot JSON round-trip 后 key 为 str）。"""
+    return d.get(lv) or d.get(str(lv)) or default
+
+
+def build_akedata_medal_snapshot(
+    achievement_table: dict[str, Any],
+    type_table: dict[str, Any],
+    i18n: dict[str, Any],
+    *,
+    fetched_at: int = 0,
+    version_label: str | None = None,
+) -> MedalSnapshotView:
+    """聚合 AKEData AchievementTable + TypeTable + I18nTextTable → 全量奖章快照。
+
+    AKEData 是游戏客户端 TableCfg：``achv_*`` id 直接当 ``medal_id``（与森空岛 hex 经 md5
+    关联），``canBeUpgraded``/``canBePlated`` 是直字段，``levelInfos`` 给逐档 ``achieveLevel``，
+    名字/描述/分类名按 text-id 在 ``i18n`` 解析。图标路径规则：
+    ``<ICON_BASE>/<achvId>_lv<maxLevel:02d>.png``（与站点 ``v3-table-data.js`` 一致）。
+    """
+    # groupId -> (categoryPriority, category_name, group_name)
+    group_map: dict[str, tuple[int, str, str]] = {}
+    for _type_key, tv in (type_table or {}).items():
+        if not isinstance(tv, dict):
+            continue
+        priority = _to_int(tv.get("categoryPriority"))
+        cat_name = _i18n_text(i18n, tv.get("categoryName"))
+        for group in tv.get("achievementGroupData") or []:
+            if not isinstance(group, dict):
+                continue
+            gid = str(group.get("groupId") or "")
+            if gid:
+                group_map[gid] = (priority, cat_name, _i18n_text(i18n, group.get("groupName")))
+
+    medals: list[MedalItemView] = []
+    for achv_id, entry in (achievement_table or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        name = _i18n_text(i18n, entry.get("name"))
+        if not name:
+            continue
+        priority, cat_name, group_name = group_map.get(
+            str(entry.get("groupId") or ""), (999, "", "")
+        )
+        level_infos = entry.get("levelInfos") or {}
+        achieve_levels: list[int] = []
+        tier_desc: dict[int, str] = {}
+        tier_cond: dict[int, str] = {}
+        for li in level_infos.values():
+            if not isinstance(li, dict):
+                continue
+            al = _to_int(li.get("achieveLevel"))
+            if al <= 0:
+                continue
+            achieve_levels.append(al)
+            tier_desc[al] = _i18n_text(i18n, li.get("completeDesc"))
+            seen: set[str] = set()
+            cond_texts: list[str] = []
+            for c in li.get("conditions") or []:
+                if not isinstance(c, dict):
+                    continue
+                t = _i18n_text(i18n, c.get("desc"))
+                if t and t not in seen:
+                    seen.add(t)
+                    cond_texts.append(t)
+            tier_cond[al] = "；".join(cond_texts)
+        achieve_levels.sort()
+        init_level = _to_int(entry.get("initLevel")) or (achieve_levels[0] if achieve_levels else 0)
+        max_level = achieve_levels[-1] if achieve_levels else (init_level or 1)
+        plate_seen: set[str] = set()
+        plate_texts: list[str] = []
+        for c in entry.get("plateConditions") or []:
+            if not isinstance(c, dict):
+                continue
+            t = _i18n_text(i18n, c.get("desc"))
+            if t and t not in plate_seen:
+                plate_seen.add(t)
+                plate_texts.append(t)
+        medals.append(
+            MedalItemView(
+                medal_id=achv_id,
+                name=name,
+                category_name=cat_name,
+                group_name=group_name,
+                init_level=init_level,
+                max_level=max_level,
+                can_be_upgraded=bool(entry.get("canBeUpgraded")),
+                can_be_plated=bool(entry.get("canBePlated")),
+                order=_to_int(entry.get("order")),
+                icon_url=f"{AKEDATA_ICON_BASE}/{achv_id}_lv{max_level:02d}.png",
+                description=_tier_text(tier_desc, init_level),
+                condition=_tier_text(tier_cond, init_level),
+                plate_condition="；".join(plate_texts),
+                tier_desc=tier_desc,
+                tier_cond=tier_cond,
+            )
+        )
+
+    medals.sort(key=lambda medal: (medal.category_name, medal.order, medal.name))
+
+    level_counts: dict[int, int] = {}
+    category_counts: dict[str, int] = {}
+    platable_count = 0
+    upgradable_count = 0
+    for medal in medals:
+        level_counts[medal.max_level] = level_counts.get(medal.max_level, 0) + 1
+        if medal.category_name:
+            category_counts[medal.category_name] = category_counts.get(medal.category_name, 0) + 1
+        if medal.can_be_plated:
+            platable_count += 1
+        if medal.can_be_upgraded:
+            upgradable_count += 1
+
+    return MedalSnapshotView(
+        medals=medals,
+        version=version_label or "",
+        fetched_at=fetched_at,
+        source="akedata",
+        total_count=len(medals),
+        level_counts=level_counts,
+        platable_count=platable_count,
+        upgradable_count=upgradable_count,
+        category_counts=category_counts,
+    )
 
 
 def _fz_species_info(attrs: dict[str, Any]) -> tuple[str, str]:

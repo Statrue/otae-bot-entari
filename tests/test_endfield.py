@@ -644,7 +644,7 @@ class EndfieldCommandParserTests(unittest.TestCase):
 
     def test_help_documents_source_option(self):
         text = commands.format_help()
-        self.assertIn("--source <fz|warfarin>", text)
+        self.assertIn("--source <fz|akedata|warfarin>", text)
         self.assertIn("-s/--source", text)
 
     def test_help_documents_loadout_potential_and_weapon_skill_options(self):

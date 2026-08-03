@@ -371,3 +371,94 @@ class GachaHistoryView:
     total: int
     pool_filter: str = ""
     items: list[GachaHistoryItemView] = field(default_factory=list)
+
+
+# ----- 蚀刻章/奖章（medal）模块 -----
+
+@dataclass(slots=True)
+class MedalItemView:
+    medal_id: str
+    name: str
+    category_name: str = ""
+    group_name: str = ""
+    init_level: int = 0
+    max_level: int = 0
+    can_be_upgraded: bool = False
+    can_be_plated: bool = False
+    order: int = 0
+    icon_url: str = ""
+    description: str = ""
+    condition: str = ""
+    plate_condition: str = ""
+    tier_desc: dict[int, str] = field(default_factory=dict)
+    tier_cond: dict[int, str] = field(default_factory=dict)
+    next_description: str = ""
+    next_condition: str = ""
+    next_icon_url: str = ""
+
+
+@dataclass(slots=True)
+class MedalSnapshotView:
+    """奖章全量快照：既是版本对比基线，也是命令读取的性能缓存。"""
+    medals: list[MedalItemView] = field(default_factory=list)
+    version: str = ""                       # FZ 根条目 updatedAt[:10] 标签
+    fetched_at: int = 0
+    source: str = "fz"
+    total_count: int = 0
+    level_counts: dict[int, int] = field(default_factory=dict)      # {max_level: 数量}
+    platable_count: int = 0
+    upgradable_count: int = 0
+    category_counts: dict[str, int] = field(default_factory=dict)   # {category_name: 数量}
+
+
+@dataclass(slots=True)
+class MedalBaselineView:
+    """版本对比基线：akedata 上一游戏版本的 achv_id 集合（源和源对比的 previous 方）。
+
+    与本地 current 快照同为 akedata 源数据，口径一致；只存 diff 所需的 id 黑名单，
+    不含名字/图标（新增章展示信息取自 current）。version 用 major.minor（如「1.3」）。
+    """
+    version: str = ""                       # 上一游戏版本 major.minor 标签
+    version_id: str = ""                    # 完整 manifest id，如 "1.3.3@8190425-29"
+    ids: list[str] = field(default_factory=list)   # 上一版本全部 achv_id
+    fetched_at: int = 0
+
+
+@dataclass(slots=True)
+class MedalDiffView:
+    """F1 版本对比视图：当前快照 + 相较上一版本的新增奖章。"""
+    current: MedalSnapshotView = field(default_factory=MedalSnapshotView)
+    previous_version: str = ""
+    new_medals: list[MedalItemView] = field(default_factory=list)
+
+
+# ----- Phase 2：个人缺章（F2） -----
+
+@dataclass(slots=True)
+class MedalProgressView:
+    """SDK 玩家奖章进度归一化，按 medal_id 索引。"""
+    medal_id: str = ""
+    level: int = 0
+    plated: bool = False
+    init_level: int = 0       # achievementData.initLevel：用于校正森空岛 level 偏移（initLevel>1 时）
+    plated_icon: str = ""     # achievementData.platedIcon：镀层后图标（未镀层双卡右卡用）
+
+
+@dataclass(slots=True)
+class MedalMissingView:
+    """F2 个人缺章视图：未获得 / 未升满 / 未镀层。"""
+    nickname: str = ""
+    uid: str = ""
+    server_name: str = ""
+    snapshot_version: str = ""
+    total_count: int = 0
+    owned_count: int = 0
+    not_obtained: list[MedalItemView] = field(default_factory=list)
+    not_maxed: list[MedalItemView] = field(default_factory=list)
+    not_plated: list[MedalItemView] = field(default_factory=list)
+    not_obtained_count: int = 0       # 截断前的真实未获得总数（统计区用，非显示条目数）
+    not_maxed_count: int = 0          # 截断前的真实未升满总数
+    not_plated_count: int = 0         # 截断前的真实未镀层总数
+    truncated: bool = False
+    shown_count: int = 0
+    level_counts: dict[int, int] = field(default_factory=dict)

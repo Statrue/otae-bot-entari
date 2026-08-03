@@ -364,6 +364,21 @@ class EndfieldOfficialClient:
             raise errors[0]
         return balances
 
+    async def endfield_card_detail(self, account_token: str, role: RoleCandidate | Any) -> dict[str, Any]:
+        """查询森空岛终末地个人详情（含奖章进度）。
+
+        GET /api/v1/game/endfield/card/detail?roleId=<id>&serverId=<id>，签名 GET（query 入签名）。
+        奖章进度在 ``data.detail.achieve.achieveMedals[]``，每枚含 ``achievementData.id`` /
+        ``level`` / ``isPlated``。依据 docs/skland_endfield_personal_api.md（2026-07-15 实测）。
+        """
+        context = await self._skland_context(account_token, refresh=True)
+        return await self._signed_skland_request(
+            context,
+            "GET",
+            "/api/v1/game/endfield/card/detail",
+            params={"roleId": str(role.role_id), "serverId": str(role.server_id)},
+        )
+
     async def get_gacha_roles(self, account_token: str) -> list[RoleCandidate]:
         provider, _raw_token = decode_account_credential(account_token)
         config = _PROVIDER_CONFIGS[provider]

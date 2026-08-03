@@ -52,6 +52,7 @@ _ATTENDANCE_AKEDATA_ITEM_NAMES = {
     "item_ticketgacha_special_single": "特许寻访凭证",
     "item_ticketgacha_standard_single": "基础寻访凭证",
 }
+_ATTENDANCE_GENERIC_REWARD_NAMES = {"签到奖励", "attendance reward"}
 _ATTENDANCE_AKEDATA_ITEM_ICON_BASE = (
     "https://data.akedata.wiki/public/images/assets/beyond/dynamicassets/"
     "gameplay/ui/sprites/itemiconbig"
@@ -957,7 +958,11 @@ def _attendance_human_name(values: tuple[Any, ...], raw_ids: set[str]) -> str:
         text = _attendance_text(value)
         if not text:
             continue
-        if text.casefold() in raw_ids or _attendance_is_internal_id(text):
+        if (
+            text.casefold() in raw_ids
+            or text.casefold() in _ATTENDANCE_GENERIC_REWARD_NAMES
+            or _attendance_is_internal_id(text)
+        ):
             continue
         return text
     return ""

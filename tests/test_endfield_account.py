@@ -1479,6 +1479,32 @@ class EndfieldOfficialClientTests(unittest.IsolatedAsyncioTestCase):
             "gameplay/ui/sprites/itemiconbig/item_diamond.png",
         )
 
+    async def test_attendance_replaces_generic_service_name_with_akedata_name(self):
+        client = client_module.EndfieldOfficialClient(mock.AsyncMock())
+        client._skland_context = mock.AsyncMock(return_value=object())
+        client._signed_skland_request = mock.AsyncMock(side_effect=[
+            {
+                "code": 0,
+                "data": {
+                    "awardIds": [{"id": "endfield_attendance_4_2", "type": 3}],
+                    "resourceInfoMap": {
+                        "endfield_attendance_4_2": {
+                            "name": "签到奖励",
+                            "icon": "item_gold",
+                            "count": 2000,
+                        },
+                    },
+                },
+            },
+            {"code": 0, "data": {"calendar": []}},
+        ])
+        role = mock.Mock(role_id="role", server_id="1")
+
+        result = await client.attendance("account-token", role)
+
+        self.assertEqual(result.rewards[0].name, "折金票")
+        self.assertEqual(result.rewards[0].count, 2000)
+
     async def test_attendance_does_not_expose_unresolved_award_id(self):
         client = client_module.EndfieldOfficialClient(mock.AsyncMock())
         client._skland_context = mock.AsyncMock(return_value=object())

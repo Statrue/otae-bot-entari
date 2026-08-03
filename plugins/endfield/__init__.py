@@ -79,6 +79,7 @@ from .official_calendar import OfficialVersionCalendarSource
 from .official_calendar_draw import draw_official_version_calendar
 from .account_detail_draw import draw_account_detail_cards
 from .account_detail_service import build_account_detail_view
+from .account_detail_names import fetch_account_detail_name_map
 from .account_base_draw import draw_account_base_card
 from .account_base_service import build_account_base_view
 from .stage_draw import draw_stage_card, draw_stage_catalog_cards
@@ -126,7 +127,7 @@ ENDFIELD_HELP_IMAGE_PATH = (
 )
 CARD_CACHE_TTL_SECONDS = 600.0
 CARD_CACHE_MAX_BYTES = 48 * 1024 * 1024
-CARD_RENDER_VERSION = "endfield-card-v40"
+CARD_RENDER_VERSION = "endfield-card-v41"
 CardCacheKey = tuple[str, str, str, str, str, str, str]
 _CARD_CACHE: AsyncTTLCache[CardCacheKey, tuple[bytes, ...]] = AsyncTTLCache(
     ttl_seconds=CARD_CACHE_TTL_SECONDS,
@@ -729,9 +730,17 @@ async def _render_account_detail(
             logger.warning(f"[endfield] account currency unavailable operation={exc.operation}")
             return {}
 
-    detail, currency_balances = await asyncio.gather(
+    async def load_name_map():
+        try:
+            return await fetch_account_detail_name_map()
+        except Exception as exc:
+            logger.warning(f"[endfield] account AKE name map unavailable: {exc}")
+            return None
+
+    detail, currency_balances, name_map = await asyncio.gather(
         official_client.card_detail(token, role),
         load_currency_balances(),
+        load_name_map(),
     )
     view = build_account_detail_view(
         detail,
@@ -739,6 +748,7 @@ async def _render_account_detail(
         nickname=role.nickname,
         server_name=role.server_name or role.server_id,
         currency_balances=currency_balances,
+        name_map=name_map,
     )
     return await _finish_pngs(matcher, await draw_account_detail_cards(view))
 

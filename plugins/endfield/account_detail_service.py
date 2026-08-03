@@ -10,6 +10,7 @@ from .account_detail_models import (
     AccountStatView,
     AccountWeaponView,
 )
+from .account_detail_names import AccountDetailNameMap
 from .gacha import format_timestamp
 
 
@@ -57,6 +58,7 @@ def build_account_detail_view(
     nickname: str = "",
     server_name: str = "",
     currency_balances: Mapping[int, Any] | None = None,
+    name_map: AccountDetailNameMap | None = None,
 ) -> AccountDetailView:
     """Map a Skland ``data.detail`` payload onto the render view.
 
@@ -75,7 +77,7 @@ def build_account_detail_view(
         avatar_url=_text(base.get("avatarUrl")),
         saved_at=format_timestamp(_int_or_none(base.get("saveTime")) or 0),
         stats=_build_stats(detail, base, currency_balances or {}),
-        operators=_build_operators(detail),
+        operators=_build_operators(detail, name_map or AccountDetailNameMap()),
     )
 
 
@@ -107,9 +109,11 @@ def _build_stats(
     )
 
 
-def _build_operators(detail: Mapping[str, Any]) -> tuple[AccountOperatorView, ...]:
+def _build_operators(
+    detail: Mapping[str, Any], name_map: AccountDetailNameMap
+) -> tuple[AccountOperatorView, ...]:
     operators = [
-        _build_operator(_mapping(character))
+        _build_operator(_mapping(character), name_map)
         for character in _sequence(detail.get("chars"))
         if isinstance(character, Mapping)
     ]
@@ -124,11 +128,19 @@ def _build_operators(detail: Mapping[str, Any]) -> tuple[AccountOperatorView, ..
     return tuple(operators)
 
 
-def _build_operator(character: Mapping[str, Any]) -> AccountOperatorView:
+def _build_operator(
+    character: Mapping[str, Any], name_map: AccountDetailNameMap
+) -> AccountOperatorView:
     char_data = _mapping(character.get("charData"))
     element_key = _semantic_key(char_data.get("property"))
+    tactical = _mapping(character.get("tacticalItem"))
+    tactical_data = _mapping(tactical.get("tacticalItemData"))
     return AccountOperatorView(
-        name=_text(char_data.get("name")) or "未知干员",
+        name=_mapped_name(
+            name_map.character_names,
+            (char_data.get("id"), character.get("charId"), character.get("id")),
+            char_data.get("name"),
+        ) or "未知干员",
         rarity=_int_or_none(_semantic_value(char_data.get("rarity"))) or 0,
         level=_int_or_none(character.get("level")),
         evolve_phase=_int_or_none(character.get("evolvePhase")),
@@ -138,18 +150,22 @@ def _build_operator(character: Mapping[str, Any]) -> AccountOperatorView:
         element_color=ELEMENT_COLORS.get(element_key, "#888888"),
         weapon_type=_semantic_value(char_data.get("weaponType")),
         portrait_url=_text(char_data.get("avatarSqUrl")),
-        skills=_build_skills(character, char_data),
-        weapon=_build_weapon(character.get("weapon")),
-        equips=_build_equips(character),
-        tactical_name=_text(_mapping(_mapping(character.get("tacticalItem")).get("tacticalItemData")).get("name")),
+        skills=_build_skills(character, char_data, name_map),
+        weapon=_build_weapon(character.get("weapon"), name_map),
+        equips=_build_equips(character, name_map),
+        tactical_name=_mapped_name(
+            name_map.item_names,
+            (tactical_data.get("id"), tactical.get("id"), tactical.get("itemId")),
+            tactical_data.get("name"),
+        ),
         tactical_icon_url=_text(
-            _mapping(_mapping(character.get("tacticalItem")).get("tacticalItemData")).get("iconUrl")
+            tactical_data.get("iconUrl")
         ),
     )
 
 
 def _build_skills(
-    character: Mapping[str, Any], char_data: Mapping[str, Any]
+    character: Mapping[str, Any], char_data: Mapping[str, Any], name_map: AccountDetailNameMap
 ) -> tuple[AccountSkillView, ...]:
     user_skills = _mapping(character.get("userSkills"))
     skills = []
@@ -160,7 +176,11 @@ def _build_skills(
         type_key = _semantic_key(skill.get("type"))
         skills.append(
             AccountSkillView(
-                name=_text(skill.get("name")),
+                name=_mapped_name(
+                    name_map.skill_names,
+                    (skill.get("id"), skill.get("skillId")),
+                    skill.get("name"),
+                ),
                 icon_url=_text(skill.get("iconUrl")),
                 level=_int_or_none(learned.get("level")),
                 max_level=_int_or_none(learned.get("maxLevel")),
@@ -173,7 +193,7 @@ def _build_skills(
     return tuple(skills)
 
 
-def _build_weapon(value: Any) -> AccountWeaponView | None:
+def _build_weapon(value: Any, name_map: AccountDetailNameMap) -> AccountWeaponView | None:
     weapon = _mapping(value)
     weapon_data = _mapping(weapon.get("weaponData"))
     if not weapon or not weapon_data:
@@ -181,19 +201,29 @@ def _build_weapon(value: Any) -> AccountWeaponView | None:
     potential_level = _int_or_none(weapon.get("refineLevel"))
     gem_data = _mapping(_mapping(weapon.get("gem")).get("gemData"))
     return AccountWeaponView(
-        name=_text(weapon_data.get("name")),
+        name=_mapped_name(
+            name_map.weapon_names,
+            (weapon_data.get("id"), weapon_data.get("weaponId"), weapon.get("id"), weapon.get("weaponId")),
+            weapon_data.get("name"),
+        ),
         icon_url=_text(weapon_data.get("iconUrl")),
         rarity=_int_or_none(_semantic_value(weapon_data.get("rarity"))) or 0,
         level=_int_or_none(weapon.get("level")),
         potential_level=potential_level,
         breakthrough_level=_int_or_none(weapon.get("breakthroughLevel")),
         type_label=_semantic_value(weapon_data.get("type")),
-        gem_name=_text(gem_data.get("name")),
+        gem_name=_mapped_name(
+            name_map.item_names,
+            (gem_data.get("id"), weapon.get("gemId")),
+            gem_data.get("name"),
+        ),
         gem_icon_url=_text(gem_data.get("icon")),
     )
 
 
-def _build_equips(character: Mapping[str, Any]) -> tuple[AccountEquipView | None, ...]:
+def _build_equips(
+    character: Mapping[str, Any], name_map: AccountDetailNameMap
+) -> tuple[AccountEquipView | None, ...]:
     """Return exactly four positional slots; ``None`` marks an empty slot."""
     slots: list[AccountEquipView | None] = []
     for key, label in EQUIP_SLOTS:
@@ -204,15 +234,42 @@ def _build_equips(character: Mapping[str, Any]) -> tuple[AccountEquipView | None
         slots.append(
             AccountEquipView(
                 slot_label=label,
-                name=_text(equip_data.get("name")),
+                name=_mapped_name(
+                    name_map.item_names,
+                    (
+                        equip_data.get("id"),
+                        equip_data.get("itemId"),
+                        _mapping(character.get(key)).get("equipId"),
+                    ),
+                    equip_data.get("name"),
+                ),
                 icon_url=_text(equip_data.get("iconUrl")),
                 rarity=_equip_rarity(equip_data.get("rarity")),
                 type_label=_semantic_value(equip_data.get("type")),
                 level_label=_semantic_value(equip_data.get("level")),
-                suit_name=_text(_mapping(equip_data.get("suit")).get("name")),
+                suit_name=_mapped_name(
+                    name_map.suit_names,
+                    (
+                        _mapping(equip_data.get("suit")).get("id"),
+                        equip_data.get("suitID"),
+                    ),
+                    _mapping(equip_data.get("suit")).get("name"),
+                ),
             )
         )
     return tuple(slots)
+
+
+def _mapped_name(
+    names: Mapping[str, str], identifiers: tuple[Any, ...], fallback: Any
+) -> str:
+    for identifier in identifiers:
+        key = _text(identifier)
+        if key:
+            mapped = _text(names.get(key))
+            if mapped:
+                return mapped
+    return _text(fallback)
 
 
 def _equip_rarity(value: Any) -> int:

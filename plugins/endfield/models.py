@@ -331,6 +331,7 @@ class LoadoutView:
 class AttendanceRewardView:
     name: str
     count: int = 1
+    icon_url: str = ""
 
 
 @dataclass(slots=True)

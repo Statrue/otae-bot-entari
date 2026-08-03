@@ -1416,6 +1416,69 @@ class EndfieldOfficialClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.rewards, (client_module.AttendanceReward("签到道具", 2),))
 
+    async def test_attendance_maps_skland_alias_with_akedata_icon_id(self):
+        client = client_module.EndfieldOfficialClient(mock.AsyncMock())
+        client._skland_context = mock.AsyncMock(return_value=object())
+        client._signed_skland_request = mock.AsyncMock(side_effect=[
+            {
+                "code": 0,
+                "data": {
+                    "awardIds": [{"id": "endfield_attendance_4_2", "type": 3}],
+                    "resourceInfoMap": {
+                        "endfield_attendance_4_2": {
+                            "id": "endfield_attendance_4_2",
+                            "name": "endfield_attendance_4_2",
+                            "icon": "https://data.akedata.wiki/itemiconbig/item_diamond.png",
+                            "count": 2,
+                        },
+                    },
+                },
+            },
+            {"code": 0, "data": {"calendar": []}},
+        ])
+        role = mock.Mock(role_id="role", server_id="1")
+
+        result = await client.attendance("account-token", role)
+
+        self.assertEqual(
+            result.rewards,
+            (
+                client_module.AttendanceReward(
+                    "嵌晶玉", 2, "https://data.akedata.wiki/itemiconbig/item_diamond.png"
+                ),
+            ),
+        )
+
+    async def test_attendance_builds_akedata_icon_url_from_icon_id(self):
+        client = client_module.EndfieldOfficialClient(mock.AsyncMock())
+        client._skland_context = mock.AsyncMock(return_value=object())
+        client._signed_skland_request = mock.AsyncMock(side_effect=[
+            {
+                "code": 0,
+                "data": {
+                    "awardIds": [{"id": "endfield_attendance_4_2", "type": 3}],
+                    "resourceInfoMap": {
+                        "endfield_attendance_4_2": {
+                            "name": "endfield_attendance_4_2",
+                            "icon": "item_diamond",
+                            "count": 2,
+                        },
+                    },
+                },
+            },
+            {"code": 0, "data": {"calendar": []}},
+        ])
+        role = mock.Mock(role_id="role", server_id="1")
+
+        result = await client.attendance("account-token", role)
+
+        self.assertEqual(result.rewards[0].name, "嵌晶玉")
+        self.assertEqual(
+            result.rewards[0].icon_url,
+            "https://data.akedata.wiki/public/images/assets/beyond/dynamicassets/"
+            "gameplay/ui/sprites/itemiconbig/item_diamond.png",
+        )
+
     async def test_attendance_does_not_expose_unresolved_award_id(self):
         client = client_module.EndfieldOfficialClient(mock.AsyncMock())
         client._skland_context = mock.AsyncMock(return_value=object())
@@ -3238,6 +3301,35 @@ class EndfieldNeutralCardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body.count("当月累签"), 1)
         self.assertIn("12 天", body)
         self.assertNotIn("None 天", body)
+
+    async def test_attendance_card_embeds_reward_icon(self):
+        icon_url = "data:image/png;base64,AA=="
+        view = models_module.AttendanceCardView(
+            roles=[
+                models_module.AttendanceRoleView(
+                    nickname="测试角色",
+                    uid="****1234",
+                    server_name="测试服务器",
+                    status="success",
+                    message="签到成功",
+                    rewards=[models_module.AttendanceRewardView("嵌晶玉", 2, icon_url)],
+                )
+            ],
+        )
+        renderer = mock.AsyncMock(return_value=b"png")
+        image_urls = mock.AsyncMock(return_value={icon_url: icon_url})
+
+        with (
+            mock.patch.object(draw_module, "_image_data_urls", image_urls),
+            mock.patch.object(draw_module, "_draw_neutral_card", renderer),
+        ):
+            await draw_module.draw_attendance_card(view)
+
+        image_urls.assert_awaited_once_with((icon_url,))
+        body = renderer.await_args.args[1]
+        self.assertIn('class="attendance-reward-icon"', body)
+        self.assertIn(f'src="{icon_url}"', body)
+        self.assertIn("嵌晶玉", body)
 
     async def test_attendance_and_analysis_cards_are_grayscale(self):
         attendance = models_module.AttendanceCardView(

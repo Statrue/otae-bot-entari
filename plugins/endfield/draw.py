@@ -231,9 +231,31 @@ async def draw_equipment_card(view: EquipmentView) -> bytes:
 
 
 async def draw_attendance_card(view: AttendanceCardView) -> bytes:
+    reward_urls = tuple(
+        item.icon_url
+        for role in view.roles
+        for item in role.rewards
+        if item.icon_url
+    )
+    reward_icons = await _image_data_urls(reward_urls) if reward_urls else {}
     rows = []
     for role in view.roles:
-        rewards = "、".join(f"{esc(item.name)} × {item.count}" for item in role.rewards) or "无奖励明细"
+        reward_parts = []
+        for item in role.rewards:
+            icon_url = reward_icons.get(item.icon_url, "")
+            icon = (
+                f'<img class="attendance-reward-icon" src="{esc_attr(icon_url)}" '
+                f'alt="{esc_attr(item.name)}">'
+                if icon_url else ""
+            )
+            reward_parts.append(
+                f'<span class="attendance-reward">{icon}'
+                f'<span>{esc(item.name)} <b>× {item.count}</b></span></span>'
+            )
+        rewards = (
+            f'<span class="attendance-rewards">{"".join(reward_parts)}</span>'
+            if reward_parts else "<span>无奖励明细</span>"
+        )
         monthly_count = (
             f'<div class="attendance-meta"><span>当月累签</span><b>{role.monthly_count} 天</b></div>'
             if role.monthly_count is not None else ""
@@ -258,6 +280,7 @@ async def draw_attendance_card(view: AttendanceCardView) -> bytes:
         .attendance-row.status-failed{border-left-width:3px;background:#ededed}
         .role-main,.status{padding:18px 22px}.role-main{display:flex;flex-direction:column;justify-content:center;border-right:1px solid #b8b8b8}.role-main strong{font-size:28px}
         .status{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:20px}.status-copy{display:flex;min-width:0;flex-direction:column;justify-content:center}.status-copy>b{font-size:22px}.role-main span,.status-copy>span{margin-top:7px;color:#666;font-size:16px;line-height:1.45}
+        .attendance-rewards{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.attendance-reward{display:inline-flex;align-items:center;gap:8px;padding:5px 9px;border:1px solid #b8b8b8;background:#fff;color:#181818;line-height:1.2}.attendance-reward-icon{width:34px;height:34px;flex:none;object-fit:contain}.attendance-reward b{margin-left:3px;font-weight:900}
         .attendance-meta{min-width:118px;padding:10px 14px;border-left:4px solid #222;background:#ededed}.attendance-meta span,.attendance-meta b{display:block;margin:0}.attendance-meta span{color:#666;font-size:13px;font-weight:800}.attendance-meta b{margin-top:4px;font-size:22px;white-space:nowrap}
         """,
     )

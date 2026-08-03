@@ -40,6 +40,27 @@ CHARACTER_POOL_TYPES = (
     "E_CharacterGachaPoolType_Beginner",
 )
 
+# Skland's ``endfield_attendance_*`` values are service-side reward aliases,
+# not keys in AKEData's ItemTable.  These are the stable AKEData item ids that
+# can be recovered from a resource's ``id``/``iconId``/icon URL.  The names
+# were checked against AKEData ItemTable + I18nTextTable_CN.
+_ATTENDANCE_AKEDATA_ITEM_NAMES = {
+    "item_diamond": "嵌晶玉",
+    "item_gold": "折金票",
+    "item_originium_recharge": "衍质源石",
+    "item_ticketgacha_beginner_ten": "十连启程寻访凭证",
+    "item_ticketgacha_special_single": "特许寻访凭证",
+    "item_ticketgacha_standard_single": "基础寻访凭证",
+}
+_ATTENDANCE_AKEDATA_ITEM_ICON_BASE = (
+    "https://data.akedata.wiki/public/images/assets/beyond/dynamicassets/"
+    "gameplay/ui/sprites/itemiconbig"
+)
+_ATTENDANCE_AKEDATA_ITEM_ID_RE = re.compile(
+    r"(?:item|ticketgacha|sysbp|preset)_[a-z0-9_]+$",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class _ProviderConfig:
@@ -96,6 +117,7 @@ class EndfieldAPIError(RuntimeError):
 class AttendanceReward:
     name: str
     count: int
+    icon_url: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -882,13 +904,24 @@ def _attendance_rewards(
             or award_details.get("resourceId")
             or (award if isinstance(award, (str, int)) else "")
         )
-        item = _attendance_resource_info(award_id, resource_maps)
+        item = _attendance_resource_info((award_id, award_details), resource_maps)
+        raw_ids = {
+            candidate.casefold()
+            for candidate in _attendance_id_candidates(award_id)
+        }
+        name = _attendance_human_name(
+            (
+                item.get("name"),
+                item.get("itemName"),
+                item.get("resourceName"),
+                award_details.get("name"),
+                award_details.get("itemName"),
+            ),
+            raw_ids,
+        )
         name = (
-            _attendance_text(item.get("name"))
-            or _attendance_text(item.get("itemName"))
-            or _attendance_text(item.get("resourceName"))
-            or _attendance_text(award_details.get("name"))
-            or _attendance_text(award_details.get("itemName"))
+            name
+            or _attendance_akedata_name(item, award_details, award_id)
             or "签到奖励"
         )
         count = _as_int(
@@ -898,20 +931,151 @@ def _attendance_rewards(
             or award_details.get("quantity")
             or 1
         )
-        rewards.append(AttendanceReward(name, count))
+        canonical_id = _attendance_akedata_item_id(item, award_details, award_id)
+        icon_url = _attendance_icon_url(item, award_details, canonical_id=canonical_id)
+        rewards.append(AttendanceReward(name, count, icon_url))
     return rewards
 
 
 def _attendance_resource_info(award_id: Any, resource_maps: list[Any]) -> dict[str, Any]:
-    key = str(award_id or "")
+    keys = _attendance_id_candidates(award_id)
+    if not keys:
+        keys = (str(award_id or ""),)
     merged: dict[str, Any] = {}
     for resource_map in resource_maps:
         if not isinstance(resource_map, dict):
             continue
-        item = resource_map.get(key)
-        if isinstance(item, dict):
-            merged.update(item)
+        for key in keys:
+            item = resource_map.get(key)
+            if isinstance(item, dict):
+                merged.update(item)
     return merged
+
+
+def _attendance_human_name(values: tuple[Any, ...], raw_ids: set[str]) -> str:
+    for value in values:
+        text = _attendance_text(value)
+        if not text:
+            continue
+        if text.casefold() in raw_ids or _attendance_is_internal_id(text):
+            continue
+        return text
+    return ""
+
+
+def _attendance_akedata_name(*values: Any) -> str:
+    for value in values:
+        for candidate in _attendance_id_candidates(value):
+            name = _ATTENDANCE_AKEDATA_ITEM_NAMES.get(candidate.casefold())
+            if name:
+                return name
+    return ""
+
+
+def _attendance_akedata_item_id(*values: Any) -> str:
+    """Return a safe AKEData item id, without turning Skland aliases into URLs."""
+    for value in values:
+        for candidate in _attendance_id_candidates(value):
+            normalized = candidate.casefold()
+            if normalized in _ATTENDANCE_AKEDATA_ITEM_NAMES:
+                return normalized
+            if _ATTENDANCE_AKEDATA_ITEM_ID_RE.fullmatch(candidate):
+                return candidate
+    return ""
+
+
+def _attendance_icon_url(
+    *values: Any,
+    canonical_id: str = "",
+) -> str:
+    """Prefer the service icon, then fall back to the canonical AKEData icon."""
+    for value in values:
+        icon = _attendance_icon_value(value)
+        if icon.startswith(("http://", "https://", "data:")):
+            return icon
+    if canonical_id:
+        return f"{_ATTENDANCE_AKEDATA_ITEM_ICON_BASE}/{canonical_id}.png"
+    return ""
+
+
+def _attendance_icon_value(value: Any, *, _depth: int = 0) -> str:
+    if _depth > 3:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if not isinstance(value, dict):
+        return ""
+    for key in ("icon", "iconUrl", "iconPath", "image", "imageUrl", "url", "src"):
+        icon = _attendance_icon_value(value.get(key), _depth=_depth + 1)
+        if icon:
+            return icon
+    return ""
+
+
+def _attendance_id_candidates(value: Any, *, _depth: int = 0) -> tuple[str, ...]:
+    """Extract possible canonical item ids from a Skland resource object."""
+    if _depth > 4:
+        return ()
+
+    candidates: list[str] = []
+
+    def add(raw: Any) -> None:
+        if isinstance(raw, bool) or raw is None:
+            return
+        text = str(raw).strip()
+        if not text:
+            return
+        normalized = re.split(r"[?#]", text, maxsplit=1)[0].rstrip("/")
+        parts = [text, normalized]
+        basename = normalized.rsplit("/", 1)[-1]
+        if basename:
+            parts.append(basename)
+        for part in tuple(parts):
+            stem = re.sub(r"\.(?:png|jpe?g|webp|svg)$", "", part, flags=re.IGNORECASE)
+            if stem != part:
+                parts.append(stem)
+        for part in parts:
+            if part and part not in candidates:
+                candidates.append(part)
+
+    if isinstance(value, (str, int, float)):
+        add(value)
+    elif isinstance(value, dict):
+        for key in (
+            "id",
+            "itemId",
+            "resourceId",
+            "item_id",
+            "resource_id",
+            "iconId",
+            "icon",
+            "image",
+            "url",
+            "name",
+            "itemName",
+            "resourceName",
+        ):
+            add_values = _attendance_id_candidates(value.get(key), _depth=_depth + 1)
+            for candidate in add_values:
+                add(candidate)
+        for key in ("resource", "item", "resourceInfo", "data"):
+            nested = _attendance_id_candidates(value.get(key), _depth=_depth + 1)
+            for candidate in nested:
+                add(candidate)
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            for candidate in _attendance_id_candidates(child, _depth=_depth + 1):
+                add(candidate)
+    return tuple(candidates)
+
+
+def _attendance_is_internal_id(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if "://" in text or "/" in text or "\\" in text:
+        return True
+    return bool(re.fullmatch(r"[a-z][a-z0-9]*(?:[_-][a-z0-9]+)+", text.casefold()))
 
 
 def _attendance_text(value: Any) -> str:

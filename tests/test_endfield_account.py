@@ -1389,6 +1389,49 @@ class EndfieldOfficialClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.rewards, (client_module.AttendanceReward("奖励", 2),))
 
+    async def test_attendance_uses_calendar_resource_map_when_post_map_has_no_name(self):
+        client = client_module.EndfieldOfficialClient(mock.AsyncMock())
+        client._skland_context = mock.AsyncMock(return_value=object())
+        client._signed_skland_request = mock.AsyncMock(side_effect=[
+            {
+                "code": 0,
+                "data": {
+                    "awardIds": [{"id": "endfield_attendance_4_2", "type": 3}],
+                    "resourceInfoMap": {"endfield_attendance_4_2": {"count": 2}},
+                },
+            },
+            {
+                "code": 0,
+                "data": {
+                    "calendar": [{"awardId": "endfield_attendance_4_2", "done": True}],
+                    "resourceInfoMap": {
+                        "endfield_attendance_4_2": {"name": "签到道具", "count": 2},
+                    },
+                },
+            },
+        ])
+        role = mock.Mock(role_id="role", server_id="1")
+
+        result = await client.attendance("account-token", role)
+
+        self.assertEqual(result.rewards, (client_module.AttendanceReward("签到道具", 2),))
+
+    async def test_attendance_does_not_expose_unresolved_award_id(self):
+        client = client_module.EndfieldOfficialClient(mock.AsyncMock())
+        client._skland_context = mock.AsyncMock(return_value=object())
+        client._signed_skland_request = mock.AsyncMock(side_effect=[
+            {
+                "code": 0,
+                "data": {"awardIds": ["endfield_attendance_unknown"]},
+            },
+            {"code": 0, "data": {"calendar": []}},
+        ])
+        role = mock.Mock(role_id="role", server_id="1")
+
+        result = await client.attendance("account-token", role)
+
+        self.assertEqual(result.rewards, (client_module.AttendanceReward("签到奖励", 1),))
+
     async def test_attendance_counts_completed_days_from_month_calendar(self):
         client = client_module.EndfieldOfficialClient(mock.AsyncMock())
         client._skland_context = mock.AsyncMock(return_value=object())

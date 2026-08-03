@@ -256,6 +256,8 @@ class EndfieldOfficialClient:
         status = "success"
         message = "签到成功"
         rewards: list[AttendanceReward] = []
+        award_entries: list[tuple[Any, dict[str, Any]]] = []
+        reward_maps: list[Any] = []
         try:
             payload = await self._signed_skland_request(
                 context, "POST", "/web/v1/game/endfield/attendance", raw_body="", extra_headers=headers
@@ -268,23 +270,10 @@ class EndfieldOfficialClient:
                 raise
         else:
             data = payload.get("data") or {}
-            resource_map = data.get("resourceInfoMap") or {}
-            for award in data.get("awardIds") or []:
-                award_details = award if isinstance(award, dict) else {}
-                award_id = award_details.get("id") or award_details.get("itemId") or award_details.get("resourceId") or award
-                item = resource_map.get(str(award_id)) or {}
-                rewards.append(
-                    AttendanceReward(
-                        str(item.get("name") or item.get("itemName") or award_details.get("name") or award_id),
-                        _as_int(
-                            item.get("count")
-                            or item.get("quantity")
-                            or award_details.get("count")
-                            or award_details.get("quantity")
-                            or 1
-                        ),
-                    )
-                )
+            if isinstance(data, dict):
+                award_entries = _attendance_award_entries(data.get("awardIds"))
+                reward_maps.append(data.get("resourceInfoMap"))
+                rewards = _attendance_rewards(award_entries, reward_maps)
 
         monthly_count: int | None = None
         try:
@@ -296,6 +285,12 @@ class EndfieldOfficialClient:
         else:
             calendar_data = calendar_payload.get("data") or {}
             calendar = calendar_data.get("calendar") if isinstance(calendar_data, dict) else None
+            if isinstance(calendar_data, dict):
+                # Some responses omit names from the POST result but include them
+                # in the resource table returned by the subsequent calendar GET.
+                reward_maps.append(calendar_data.get("resourceInfoMap"))
+                if award_entries:
+                    rewards = _attendance_rewards(award_entries, reward_maps)
             if isinstance(calendar, list):
                 monthly_count = sum(
                     1 for item in calendar
@@ -850,6 +845,69 @@ def _normalize_rarity(value: Any) -> int:
 def _normalize_timestamp(value: Any) -> int:
     timestamp = _as_int(value)
     return timestamp // 1000 if timestamp >= 1_000_000_000_000 else timestamp
+
+
+def _attendance_award_entries(value: Any) -> list[tuple[Any, dict[str, Any]]]:
+    if not isinstance(value, list):
+        return []
+    entries: list[tuple[Any, dict[str, Any]]] = []
+    for award in value:
+        entries.append((award, award if isinstance(award, dict) else {}))
+    return entries
+
+
+def _attendance_rewards(
+    entries: list[tuple[Any, dict[str, Any]]], resource_maps: list[Any]
+) -> list[AttendanceReward]:
+    rewards: list[AttendanceReward] = []
+    for award, award_details in entries:
+        award_id = (
+            award_details.get("id")
+            or award_details.get("itemId")
+            or award_details.get("resourceId")
+            or (award if isinstance(award, (str, int)) else "")
+        )
+        item = _attendance_resource_info(award_id, resource_maps)
+        name = (
+            _attendance_text(item.get("name"))
+            or _attendance_text(item.get("itemName"))
+            or _attendance_text(item.get("resourceName"))
+            or _attendance_text(award_details.get("name"))
+            or _attendance_text(award_details.get("itemName"))
+            or "签到奖励"
+        )
+        count = _as_int(
+            item.get("count")
+            or item.get("quantity")
+            or award_details.get("count")
+            or award_details.get("quantity")
+            or 1
+        )
+        rewards.append(AttendanceReward(name, count))
+    return rewards
+
+
+def _attendance_resource_info(award_id: Any, resource_maps: list[Any]) -> dict[str, Any]:
+    key = str(award_id or "")
+    merged: dict[str, Any] = {}
+    for resource_map in resource_maps:
+        if not isinstance(resource_map, dict):
+            continue
+        item = resource_map.get(key)
+        if isinstance(item, dict):
+            merged.update(item)
+    return merged
+
+
+def _attendance_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("zh-cn", "zh_CN", "zh-CN", "zh", "cn", "text", "value", "name"):
+            text = _attendance_text(value.get(key))
+            if text:
+                return text
+    return ""
 
 
 def _as_int(value: Any) -> int:

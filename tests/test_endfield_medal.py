@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from plugins.endfield.medal_store import (
     MedalSnapshotStore,
@@ -18,6 +20,9 @@ from plugins.endfield.models import (
     MedalSnapshotView,
 )
 from plugins.endfield.service import EndfieldService
+from plugins.endfield.sources import source_order
+
+endfield_service_module = importlib.import_module("plugins.endfield.service")
 
 
 def _make_medal(medal_id: str, *, name: str = "", max_level: int = 1, **kw) -> MedalItemView:
@@ -101,6 +106,17 @@ class MedalSnapshotStoreTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(bl.version, "1.3")
             self.assertEqual(set(bl.ids), {"x"})
 
+    async def test_current_and_baseline_can_be_persisted_together(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = MedalSnapshotStore(str(Path(d) / "snap.json"))
+            await store.replace_current_and_baseline(
+                _make_snapshot(["new"], version="1.4"),
+                MedalBaselineView(version="1.3", ids=["old"]),
+            )
+            reopened = MedalSnapshotStore(str(Path(d) / "snap.json"))
+            self.assertEqual(reopened.load_current_view().version, "1.4")
+            self.assertEqual(reopened.load_baseline_view().version, "1.3")
+
 
 class MedalDiffTest(unittest.TestCase):
     def test_diff_finds_only_new_ids(self):
@@ -112,7 +128,7 @@ class MedalDiffTest(unittest.TestCase):
         self.assertEqual(diff.previous_version, "1.3")
 
     def test_diff_against_none_is_empty(self):
-        # 无更早版本 / 基线抓取失败 → new_medals 为空（只展示总数统计）
+        # 无更早版本时 new_medals 为空（只展示总数统计）
         service = EndfieldService.__new__(EndfieldService)
         current = _make_snapshot(["a", "b"], version="1.4")
         diff = service.build_medal_diff(current, None)
@@ -256,6 +272,40 @@ class AkedataVersionSelectTest(unittest.TestCase):
     def test_pick_previous_none_when_only_one_game_version(self):
         m = self._manifest(["1.4.4@8764515-7", "1.4.4@8692565-6"])
         self.assertIsNone(pick_previous_game_version(m))
+
+    def test_medal_source_is_akedata(self):
+        self.assertEqual(source_order("medal"), ("akedata",))
+
+
+class AkedataFetchValidationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_tables_are_rejected_before_persisting(self):
+        service = EndfieldService.__new__(EndfieldService)
+        with patch(
+            "plugins.endfield.akedata_client.fetch_akedata_medal_tables",
+            new=AsyncMock(return_value=({}, {}, {}, "1.4.4@test")),
+        ):
+            with self.assertRaisesRegex(ValueError, "AchievementTable 为空"):
+                await service.fetch_medal_snapshot_akedata()
+
+    async def test_empty_historical_table_is_rejected(self):
+        service = EndfieldService.__new__(EndfieldService)
+        with patch.object(
+            endfield_service_module,
+            "fetch_akedata_manifest",
+            new=AsyncMock(return_value={
+                "latest": "1.4.4@test",
+                "versions": [
+                    {"id": "1.4.4@test", "tableCfgPath": "current"},
+                    {"id": "1.3.3@test", "tableCfgPath": "previous"},
+                ],
+            }),
+        ), patch.object(
+            endfield_service_module,
+            "fetch_akedata_achievement_table",
+            new=AsyncMock(return_value={}),
+        ):
+            with self.assertRaisesRegex(ValueError, "历史 AchievementTable 为空"):
+                await service.fetch_akedata_baseline()
 
 
 class AkedataMedalSnapshotTest(unittest.TestCase):

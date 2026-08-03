@@ -372,12 +372,27 @@ async def _handle_medal(matcher, command: ParsedEndfieldCommand) -> None:
             except Exception as exc:
                 logger.warning(f"[endfield] medal refresh failed: {exc}")
                 return await matcher.finish("AKEData 数据源暂时不可用，请稍后重试。")
-            await medal_store.replace_current(snapshot)
-            # 版本对比基线：akedata 上一游戏版本（源和源）；抓取失败不阻塞 current
-            baseline = await service.fetch_akedata_baseline()
-            await medal_store.replace_baseline(baseline)
+            # 先抓基线，再成对写盘；基线暂时不可用时保留旧基线，避免丢失版本对比。
+            try:
+                baseline = await service.fetch_akedata_baseline()
+            except Exception as exc:
+                logger.warning(f"[endfield] medal baseline unavailable; keeping previous: {exc}")
+                baseline = None
+                baseline_available = False
+            else:
+                baseline_available = True
+            try:
+                if baseline_available:
+                    await medal_store.replace_current_and_baseline(snapshot, baseline)
+                else:
+                    await medal_store.replace_current(snapshot)
+            except Exception as exc:
+                logger.exception(f"[endfield] medal snapshot persistence failed: {exc}")
+                return await matcher.finish("蚀刻章数据保存失败，请稍后重试。")
+            stored_baseline = medal_store.load_baseline_view()
             baseline_info = (
-                f"{baseline.version}({len(baseline.ids)} ids)" if baseline else "none"
+                f"{stored_baseline.version}({len(stored_baseline.ids)} ids)"
+                if stored_baseline else "none"
             )
             logger.info(
                 f"[endfield] medal snapshot refreshed medals={snapshot.total_count} "

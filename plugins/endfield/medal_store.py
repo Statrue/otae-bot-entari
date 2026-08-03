@@ -37,10 +37,31 @@ class MedalSnapshotStore:
         async with self._lock:
             await asyncio.to_thread(self._persist_current, current_dict)
 
+    async def replace_current_and_baseline(
+        self,
+        snapshot: MedalSnapshotView,
+        baseline: MedalBaselineView | None,
+    ) -> None:
+        """Persist a current snapshot and its matching baseline in one locked save."""
+        current_dict = _snapshot_to_dict(snapshot)
+        baseline_dict = _baseline_to_dict(baseline) if baseline else None
+        async with self._lock:
+            await asyncio.to_thread(self._persist_current_and_baseline, current_dict, baseline_dict)
+
     def _persist_current(self, current_dict: dict[str, Any]) -> None:
         # 直接改底层 _data 再一次 _save，避免 set() 两次全量写盘
         self._store._data["current"] = current_dict
         self._store._data.pop("previous", None)  # 清理旧的滚动基线残留
+        self._store._save()
+
+    def _persist_current_and_baseline(
+        self,
+        current_dict: dict[str, Any],
+        baseline_dict: dict[str, Any] | None,
+    ) -> None:
+        self._store._data["current"] = current_dict
+        self._store._data["baseline"] = baseline_dict
+        self._store._data.pop("previous", None)
         self._store._save()
 
     async def replace_baseline(self, baseline: MedalBaselineView | None) -> None:

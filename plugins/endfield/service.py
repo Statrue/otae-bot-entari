@@ -78,6 +78,7 @@ WEAPON_TYPE_ORDER = {
     name: index for index, name in enumerate(("单手剑", "双手剑", "施术单元", "长柄武器", "手铳"))
 }
 STATIC_BASE = "https://static.warfarin.wiki/v4"
+_MIN_AKEDATA_MEDAL_COMPLETENESS = 0.8
 FZ_ASSET_HOST = "assets.fz.wiki"
 WEAPON_OPTIONS = ("单手剑", "双手剑", "施术单元", "长枪", "手铳")
 
@@ -430,19 +431,38 @@ class EndfieldService:
         from .akedata_client import fetch_akedata_medal_tables
 
         achievement, type_table, i18n, version = await fetch_akedata_medal_tables()
-        return build_akedata_medal_snapshot(
+        if not isinstance(achievement, dict) or not achievement:
+            raise ValueError("AKEData AchievementTable 为空")
+        if not isinstance(type_table, dict) or not type_table:
+            raise ValueError("AKEData AchievementTypeTable 为空")
+        if not isinstance(i18n, dict) or not i18n:
+            raise ValueError("AKEData I18nTextTable_CN 为空")
+
+        expected_count = sum(1 for entry in achievement.values() if isinstance(entry, dict))
+        snapshot = build_akedata_medal_snapshot(
             achievement,
             type_table,
             i18n,
             fetched_at=fetched_at or int(time.time()),
             version_label=game_version_label(version),
         )
+        if snapshot.total_count <= 0:
+            raise ValueError("AKEData 蚀刻章快照为空")
+        # A manifest can become visible before all table/i18n files are consistent.
+        # Do not replace a known-good snapshot with a silently truncated one.
+        if expected_count and snapshot.total_count < math.ceil(
+            expected_count * _MIN_AKEDATA_MEDAL_COMPLETENESS
+        ):
+            raise ValueError(
+                f"AKEData 蚀刻章快照不完整：{snapshot.total_count}/{expected_count}"
+            )
+        return snapshot
 
     async def fetch_akedata_baseline(self, *, fetched_at: int | None = None) -> MedalBaselineView | None:
         """抓 akedata「上一游戏版本」基线（版本对比的 previous 方，源和源）。
 
         manifest → pick_previous_game_version → 抓其 AchievementTable（仅取 achv_id 集合）。
-        无更早游戏版本或抓取失败时返回 None，不阻塞 current 快照刷新。
+        无更早游戏版本时返回 None；抓取失败会抛出异常，由调用方保留已有基线。
         """
         try:
             manifest = await fetch_akedata_manifest()
@@ -450,7 +470,11 @@ class EndfieldService:
             if not prev or not prev.get("tableCfgPath"):
                 return None
             table = await fetch_akedata_achievement_table(str(prev["tableCfgPath"]).lstrip("/"))
+            if not isinstance(table, dict) or not table:
+                raise ValueError("AKEData 历史 AchievementTable 为空")
             ids = [aid for aid, entry in table.items() if isinstance(entry, dict)]
+            if not ids:
+                raise ValueError("AKEData 历史蚀刻章基线为空")
             return MedalBaselineView(
                 version=game_version_label(str(prev.get("id") or "")),
                 version_id=str(prev.get("id") or ""),
@@ -459,7 +483,7 @@ class EndfieldService:
             )
         except Exception as exc:
             logger.warning(f"[endfield] medal baseline fetch failed: {exc}")
-            return None
+            raise
 
     def build_medal_diff(
         self,
@@ -468,7 +492,7 @@ class EndfieldService:
     ) -> MedalDiffView:
         """对比 current 快照与上一版本基线筛出新增奖章（id 集合差集）。
 
-        baseline 为 None（无更早版本 / 抓取失败）时无对比基线，new_medals 为空。
+        baseline 为 None（无更早版本）时无对比基线，new_medals 为空。
         双方同为 akedata 源数据，口径一致；previous_version 用 baseline 的 major.minor。
         """
         if baseline is None:

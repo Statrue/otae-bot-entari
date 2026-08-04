@@ -16,11 +16,13 @@ venv/
 # ── IDE ──
 .idea/
 .vscode/
+.codex/
 
 # ── Runtime data ──
 .runtime/
 .codex_preview/
 data/
+output/
 *.db
 *.sqlite3
 
@@ -42,3 +44,6 @@ CURRENT_ENDFIELD_PROJECT_STATUS.md
 # ── OS ──
 .DS_Store
 Thumbs.db
+
+# ── Logs ──
+*.log

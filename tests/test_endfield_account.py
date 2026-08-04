@@ -2241,10 +2241,17 @@ class EndfieldGachaServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertAlmostEqual(role_value.before_up, 49.0509, places=4)
         self.assertAlmostEqual(role_value.after_up, 44.0141, places=4)
+        self.assertAlmostEqual(role_value.combined_before_up, 51.9186, places=4)
+        self.assertAlmostEqual(role_value.combined_after_up, 46.7687, places=4)
         self.assertAlmostEqual(role_value.actual, 110 / 4)
-        self.assertEqual((role_value.paid_pulls, role_value.account_pulls, role_value.outcomes), (100, 110, 4))
+        self.assertEqual(
+            (role_value.paid_pulls, role_value.free_pulls, role_value.account_pulls, role_value.outcomes),
+            (100, 10, 110, 4),
+        )
         self.assertAlmostEqual(role_value.up_before, 81.37567692616722)
         self.assertIsNone(role_value.up_after)
+        self.assertAlmostEqual(role_value.up_combined_before, 86.6914, places=4)
+        self.assertIsNone(role_value.up_combined_after)
         self.assertAlmostEqual(role_value.actual_up, 110 / 3)
         self.assertEqual(role_value.up_outcomes, 3)
         self.assertAlmostEqual(weapon_value.before_up, 18.6755, places=4)
@@ -3077,10 +3084,36 @@ class EndfieldNeutralCardTests(unittest.IsolatedAsyncioTestCase):
             gacha_module.calculate_six_star_expectation([weapon], "武器"), "武器",
         )
 
-        self.assertIn("获取up角色的期望抽数为：<b>81.4</b>，该账号实际抽数为：<b>100.0</b>", character_html)
-        self.assertIn("获取6星角色的期望抽数为：<b>49.1 → 44.0</b>，该账号实际抽数为：<b>100.0</b>", character_html)
-        self.assertIn("获取up武器的期望抽数为：<b>54.0 → 53.5</b>，该账号实际抽数为：<b>40.0</b>", weapon_html)
-        self.assertIn("获取6星武器的期望抽数为：<b>18.7 → 16.1</b>，该账号实际抽数为：<b>40.0</b>", weapon_html)
+        self.assertIn("<strong>UP角色</strong><small>含120抽保底</small>", character_html)
+        self.assertIn("综合期望 <b>81.4</b> 抽", character_html)
+        self.assertIn("<strong>6星角色</strong><small>首个UP前 → 后</small>", character_html)
+        self.assertIn("综合期望 <b>49.1 → 44.0</b> 抽", character_html)
+        self.assertIn("<strong>UP武器</strong><small>首个UP前 → 后</small>", weapon_html)
+        self.assertIn("综合期望 <b>54.0 → 53.5</b> 抽", weapon_html)
+        self.assertIn("账号当前 <b>40.0</b> 抽", weapon_html)
+
+    def test_gacha_summary_blends_free_pulls_at_base_rates(self):
+        character = gacha_module.PoolAnalysis(
+            "special", "限定池", "角色", 110, 0, paid_total=100,
+            six_stars=(gacha_module.SixStarEvent(
+                "UP角色", "限定池", "角色", 1, item_id="up-role",
+            ),),
+            free_pull_count=10,
+            free_batches=(gacha_module.FreePullBatch(
+                2, 10, (gacha_module.SixStarEvent(
+                    "免费UP角色", "限定池", "角色", 2, item_id="up-role",
+                ),),
+            ),),
+            up_item_ids=("up-role",),
+        )
+
+        html = draw_module._draw_gacha_expectation_summary(
+            gacha_module.calculate_six_star_expectation([character], "角色"), "角色",
+        )
+
+        self.assertIn("综合期望 <b>86.7</b> 抽", html)
+        self.assertIn("综合期望 <b>51.9 → 46.8</b> 抽", html)
+        self.assertIn("账号当前 <b>55.0</b> 抽", html)
 
     async def test_gacha_analysis_moves_expectations_to_three_card_summary(self):
         pools = (
@@ -3248,9 +3281,9 @@ class EndfieldNeutralCardTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("当前累计", historical_html)
         self.assertIn("免费十连 · 未出六星", historical_html)
         self.assertIn("不受且不影响任何保底", historical_html)
-        self.assertIn("计保底 0 · 垫抽 10 · 免费 10", historical_html)
+        self.assertIn("付费 0 · 垫抽 10 · 免费 10", historical_html)
         self.assertIn("当前累计", current_html)
-        self.assertIn("计保底 25 · 垫抽 5 · 免费 0", current_html)
+        self.assertIn("付费 25 · 垫抽 5 · 免费 0", current_html)
         self.assertIn("距小保底", current_html)
         self.assertIn("75 抽", current_html)
         self.assertIn("距大保底", current_html)

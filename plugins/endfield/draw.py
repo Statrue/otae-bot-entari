@@ -364,7 +364,7 @@ async def draw_gacha_analysis_card(
     if history_missing_count:
         total_detail += f" · 统计补齐 {history_missing_count}"
     else:
-        total_detail = f"计保底 {paid_total} · 免费 {free_pull_count}"
+        total_detail = f"付费 {paid_total} · 免费 {free_pull_count}"
     total_detail += f" · 六星记录 {six_star_total}"
     character_expectation = calculate_six_star_expectation(view.pools, "角色")
     weapon_expectation = calculate_six_star_expectation(view.pools, "武器")
@@ -394,7 +394,7 @@ async def draw_gacha_analysis_card(
         .free-icons{min-height:36px}.free-marker{width:76px;height:32px}
     """ if compact_layout else ""
     summary_html = (
-        f'<section class="summary"><div class="total"><span>卡池总数</span><strong>{view.total}</strong><small>{esc(total_detail)}</small></div><div class="metric"><div class="metric-head"><span>角色寻访</span><strong>{character_total}</strong></div><small>计保底 {character_paid}</small>{character_expectation_html}</div><div class="metric"><div class="metric-head"><span>武器申领</span><strong>{weapon_total}</strong></div><small>计保底 {weapon_paid}</small>{weapon_expectation_html}</div></section>'
+        f'<section class="summary"><div class="total"><span>卡池总数</span><strong>{view.total}</strong><small>{esc(total_detail)}</small></div><div class="metric"><div class="metric-head"><span>角色寻访</span><strong>{character_total}</strong></div><small>付费 {character_paid}</small>{character_expectation_html}</div><div class="metric"><div class="metric-head"><span>武器申领</span><strong>{weapon_total}</strong></div><small>付费 {weapon_paid}</small>{weapon_expectation_html}</div></section>'
         if show_summary else ""
     )
     return await _draw_neutral_card(
@@ -410,7 +410,7 @@ async def draw_gacha_analysis_card(
         """,
         extra_css=f"""
         header p{{margin:8px 0 0;color:#d0d0d0;font-size:16px}}.sync-state{{text-align:right}}.sync-state b{{display:block;font-size:22px}}.sync-state span{{display:block;margin-top:8px;color:#ccc}}
-        .summary{{display:grid;grid-template-columns:.85fr 1.575fr 1.575fr;gap:10px;margin-bottom:16px}}.total,.metric{{min-height:172px;padding:15px 17px;border:1px solid #999;background:#fff}}.total{{display:flex;flex-direction:column;justify-content:center;border:3px solid #222}}.total span,.metric-head span{{color:#666;font-size:15px}}.total strong{{font-size:48px;line-height:1}}.metric-head{{display:flex;align-items:flex-end;justify-content:space-between;gap:12px}}.metric-head strong{{font-size:31px;line-height:1}}.total small,.metric>small{{display:block;margin-top:8px;color:#777;font-size:11px;font-weight:800}}.expectation-summary{{display:grid;gap:5px;margin-top:10px}}.expectation-row{{padding:7px 8px;border-left:4px solid #333;background:#ededed;color:#444;font-size:10px;font-weight:850;line-height:1.35}}.expectation-row b{{color:#111;font-size:12px;white-space:nowrap}}
+        .summary{{display:grid;grid-template-columns:.85fr 1.575fr 1.575fr;gap:10px;margin-bottom:16px}}.total,.metric{{min-height:172px;padding:15px 17px;border:1px solid #999;background:#fff}}.total{{display:flex;flex-direction:column;justify-content:center;border:3px solid #222}}.total span,.metric-head span{{color:#666;font-size:15px}}.total strong{{font-size:48px;line-height:1}}.metric-head{{display:flex;align-items:flex-end;justify-content:space-between;gap:12px}}.metric-head strong{{font-size:31px;line-height:1}}.total small,.metric>small{{display:block;margin-top:8px;color:#777;font-size:11px;font-weight:800}}.expectation-summary{{display:grid;gap:5px;margin-top:10px}}.expectation-row{{display:grid;grid-template-columns:76px minmax(0,1fr);gap:8px;padding:7px 8px;border-left:4px solid #333;background:#ededed;color:#444;font-size:10px;font-weight:850;line-height:1.35}}.expectation-label strong,.expectation-label small{{display:block}}.expectation-label strong{{color:#111;font-size:12px}}.expectation-label small{{margin-top:2px;color:#777;font-size:8px}}.expectation-values{{display:flex;flex-wrap:wrap;align-items:center;gap:3px 10px}}.expectation-values span{{white-space:nowrap}}.expectation-row b{{color:#111;font-size:12px;white-space:nowrap}}
         .two-column{{display:grid;grid-template-columns:1fr 1fr;align-items:start;gap:16px}}.pool-column{{min-width:0;border:1px solid #777;background:#e4e4e4}}.column-head{{display:flex;justify-content:space-between;align-items:flex-end;padding:15px 17px;border-bottom:4px solid #222;background:#fff}}.column-head h2{{margin:0;font-size:25px}}.column-head p{{margin:0;color:#666;font-size:13px}}.pool-stack{{display:grid;gap:10px;padding:10px}}.pool-card{{min-width:0;border:1px solid #888;background:#fff}}.pool-head{{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;overflow:hidden;padding:11px 13px;border-bottom:1px solid #aaa}}.pool-head.has-banner{{min-height:92px}}.pool-head.character-banner-head{{padding-left:118px}}.pool-head.weapon-banner-head{{padding-left:102px}}.pool-head>.pool-title,.pool-head>.pool-total{{position:relative;z-index:2}}.pool-title{{min-width:0}}.pool-title strong{{display:block;font-size:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}.pool-title span{{display:block;margin-top:3px;color:#777;font-size:11px}}.pool-total{{text-align:right}}.pool-total b{{display:block;font-size:22px}}.pool-total span{{display:block;color:#777;font-size:10px;white-space:nowrap}}.pool-total .pool-history{{margin-top:2px;color:#999;font-size:9px}}.pool-banner{{position:absolute;z-index:0;inset:0 21% 0 32%;display:flex;justify-content:center;align-items:center;overflow:hidden;pointer-events:none}}.pool-banner::after{{content:"";position:absolute;z-index:2;inset:-1px;background:linear-gradient(90deg,#fff 0%,rgba(255,255,255,.36) 18%,rgba(255,255,255,.08) 52%,rgba(255,255,255,.88) 100%)}}.pool-banner.character-pool-banner{{inset:0 auto 0 0;width:124px;justify-content:flex-start}}.pool-banner.character-pool-banner::after,.pool-banner.weapon-pool-banner::after{{background:linear-gradient(90deg,rgba(255,255,255,.04) 0%,rgba(255,255,255,.10) 58%,#fff 100%)}}.pool-banner.weapon-pool-banner{{inset:0 auto 0 0;width:108px;justify-content:center}}.pool-banner img{{position:relative;z-index:1;filter:saturate(.96) contrast(1.08)}}.pool-banner img.character-banner{{width:124px;height:112px;object-fit:cover;object-position:center 42%;-webkit-mask-image:radial-gradient(ellipse 82% 78% at center,#000 42%,rgba(0,0,0,.82) 64%,transparent 100%);mask-image:radial-gradient(ellipse 82% 78% at center,#000 42%,rgba(0,0,0,.82) 64%,transparent 100%)}}.pool-banner.multi-banner img.character-banner{{width:84px;height:108px;margin-left:-42px}}.pool-banner img:first-child{{margin-left:0}}.pool-banner.weapon-pool-banner img.weapon-banner{{width:92px;height:84px;margin:0;object-fit:contain;transform:translateX(-12px);-webkit-mask-image:radial-gradient(ellipse 86% 82% at center,#000 58%,rgba(0,0,0,.82) 72%,transparent 100%);mask-image:radial-gradient(ellipse 86% 82% at center,#000 58%,rgba(0,0,0,.82) 72%,transparent 100%)}}
         .current-tag{{display:inline-block;margin-right:6px;padding:2px 5px;border:1px solid #222;background:#222;color:#fff;font-size:9px;letter-spacing:.1em;vertical-align:2px}}.pity-grid{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-bottom:1px solid #aaa;background:#ececec}}.pity-grid.pity-two{{grid-template-columns:repeat(2,minmax(0,1fr))}}.pity-item{{min-width:0;padding:8px 10px;border-right:1px solid #bbb}}.pity-item:last-child{{border-right:0}}.pity-item span{{display:block;color:#666;font-size:9px;font-weight:900}}.pity-item b{{display:block;margin-top:2px;font-size:15px;white-space:nowrap}}.pity-item small{{display:block;margin-top:2px;color:#777;font-size:9px}}
         .pull-bars{{display:grid;gap:7px;padding:9px 11px 11px}}.pull-row{{display:grid;grid-template-columns:46px 144px minmax(0,1fr);align-items:center;gap:8px;min-width:0}}.gacha-thumb,.current-marker{{width:44px;height:44px;display:grid;place-items:center;overflow:hidden;border:1px solid #777;background:#eee}}.gacha-thumb{{border:2px solid #222}}.gacha-thumb img{{width:100%;height:100%;object-fit:contain}}.gacha-thumb span{{font-size:11px;font-weight:950}}.current-marker{{color:#555;font-size:11px;font-weight:900}}.pull-copy{{min-width:0}}.pull-copy strong{{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:14px}}.pull-copy time{{display:block;margin-top:3px;color:#777;font-size:9px}}.bar-track{{position:relative;height:36px;border:1px solid #999;background:#ededed}}.bar-fill{{height:100%;min-width:46px;background:#333}}.bar-fill.current{{background:#777}}.bar-value{{position:absolute;inset:0;display:flex;align-items:center;gap:7px;padding:0 10px;overflow:hidden}}.bar-value b{{flex:0 0 auto;color:#fff;white-space:nowrap;font-size:16px}}.pity-hits{{display:flex;align-items:center;gap:5px;min-width:0}}.pity-hit{{padding:3px 7px;border:2px solid #111;background:#fff;color:#111;font-size:11px;font-weight:950;line-height:1;white-space:nowrap;box-shadow:0 0 0 1px #fff}}.pity-hit-guarantee{{padding:3px 7px;font-size:11px;font-weight:950}}.pity-hit-small{{border-color:#3f6078;background:#e5eef4;color:#29485d;box-shadow:0 0 0 1px #f7fbfd}}.pity-hit-large{{border-color:#7a5c2e;background:#f4ead7;color:#5d421d;box-shadow:0 0 0 1px #fffaf0}}.pity-hit-miss{{padding:3px 8px;border:2px solid #f8e9e9;background:#8a3f46;color:#fff;font-size:12px;font-weight:950;letter-spacing:.12em;box-shadow:0 0 0 1px #5a2328}}.pool-empty{{padding:4px 0;color:#777;font-size:11px}}.free-row{{display:grid;grid-template-columns:96px minmax(0,1fr) auto;align-items:center;gap:8px;min-height:48px;padding:5px 7px;border:1px dashed #777;background:#f0f0f0}}.free-icons{{display:flex;align-items:center;min-height:44px}}.free-icons .gacha-thumb{{margin-right:-8px;background:#fff}}.free-marker{{width:88px;height:38px;display:grid;place-items:center;border:2px solid #555;color:#444;font-size:11px;font-weight:950;letter-spacing:.08em}}.free-count{{padding:4px 7px;border:1px solid #777;background:#fff;font-size:11px;font-weight:900;white-space:nowrap}}
@@ -547,7 +547,7 @@ def _draw_gacha_pool_column(
     six_star_label = f"本页 {six_star_total} 个六星" if paginated else f"{six_star_total} 个六星"
     return f"""
     <div class="pool-column">
-      <div class="column-head"><h2>{esc(title)}</h2><p>计保底 {paid_total} 抽 · 免费 {free_total} 抽 · {six_star_label}</p></div>
+      <div class="column-head"><h2>{esc(title)}</h2><p>付费 {paid_total} 抽 · 免费 {free_total} 抽 · {six_star_label}</p></div>
       <div class="pool-stack">{content}</div>
     </div>
     """
@@ -558,10 +558,12 @@ def _draw_gacha_expectation_summary(expectation: SixStarExpectation, item_type: 
         '<div class="expectation-summary">'
         + _draw_gacha_expectation_row(
             "up", item_type, expectation.up_before, expectation.up_after,
+            expectation.up_combined_before, expectation.up_combined_after,
             expectation.actual_up,
         )
         + _draw_gacha_expectation_row(
             "6星", item_type, expectation.before_up, expectation.after_up,
+            expectation.combined_before_up, expectation.combined_after_up,
             expectation.actual,
         )
         + "</div>"
@@ -573,14 +575,27 @@ def _draw_gacha_expectation_row(
     item_type: str,
     before: float,
     after: float | None,
+    combined_before: float | None,
+    combined_after: float | None,
     actual: float | None,
 ) -> str:
     theory = f"{before:.1f}" if after is None else f"{before:.1f} → {after:.1f}"
+    combined = (
+        f"{combined_before:.1f}"
+        if combined_after is None
+        else f"{combined_before:.1f} → {combined_after:.1f}"
+    ) if combined_before is not None else "暂无"
     actual_text = f"{actual:.1f}" if actual is not None else "暂无"
+    scope = "含120抽保底" if rarity_label == "up" and item_type == "角色" else "首个UP前 → 后"
+    expectation_text = combined if combined_before is not None else theory
     return (
         '<div class="expectation-row">'
-        f'获取{esc(rarity_label)}{esc(item_type)}的期望抽数为：<b>{esc(theory)}</b>，'
-        f'该账号实际抽数为：<b>{esc(actual_text)}</b>'
+        f'<div class="expectation-label"><strong>{esc(rarity_label.upper())}{esc(item_type)}</strong>'
+        f'<small>{esc(scope)}</small></div>'
+        '<div class="expectation-values">'
+        f'<span>综合期望 <b>{esc(expectation_text)}</b> 抽</span>'
+        f'<span>账号当前 <b>{esc(actual_text)}</b> 抽</span>'
+        '</div>'
         '</div>'
     )
 
@@ -613,7 +628,7 @@ def _draw_gacha_pool(pool: PoolAnalysis) -> str:
     elif banner_art:
         banner_class += " weapon-banner-head"
     paid_total = _pool_paid_total(pool)
-    total_caption = f"计保底 {paid_total} · 垫抽 {pool.since_six_star} · 免费 {pool.free_pull_count}"
+    total_caption = f"付费 {paid_total} · 垫抽 {pool.since_six_star} · 免费 {pool.free_pull_count}"
     history_caption = (
         f'<span class="pool-history">逐抽 {pool.recorded_total} · 统计补齐 {pool.history_missing_count}</span>'
         if pool.history_missing_count else ""
@@ -621,7 +636,7 @@ def _draw_gacha_pool(pool: PoolAnalysis) -> str:
     pity = _draw_pity_grid(pool) if pool.is_current else ""
     return f"""
     <section class="pool-card">
-      <div class="pool-head{banner_class}">{banner_art}<div class="pool-title"><strong>{current_tag}{esc(pool.name)}</strong><span>{esc(latest)} · {len(pool.six_stars)} 个计保底六星</span></div><div class="pool-total"><b>{pool.total}</b><span>{esc(total_caption)}</span>{history_caption}</div></div>
+      <div class="pool-head{banner_class}">{banner_art}<div class="pool-title"><strong>{current_tag}{esc(pool.name)}</strong><span>{esc(latest)} · {len(pool.six_stars)} 个付费六星</span></div><div class="pool-total"><b>{pool.total}</b><span>{esc(total_caption)}</span>{history_caption}</div></div>
       {pity}
       <div class="pull-bars">{''.join(rows)}{empty}</div>
     </section>
@@ -745,7 +760,7 @@ def _draw_free_pull_row(batch: FreePullBatch) -> str:
         names = "、".join(item.name for item in batch.six_stars)
         marker = f'<div class="free-icons">{icons}</div>'
         title = f"免费十连 · {names}"
-        detail = f"出了 {len(batch.six_stars)} 个六星 · 不计保底"
+        detail = f"出了 {len(batch.six_stars)} 个六星 · 不参与保底"
     else:
         marker = '<div class="free-marker">FREE ×10</div>'
         title = "免费十连 · 未出六星"
@@ -1471,7 +1486,7 @@ html,body{{margin:0;width:1500px;background:#d9dde0;color:#171b1f;font-family:"M
 .loadout-head{{min-height:92px;display:grid;grid-template-columns:1fr auto;align-items:end;gap:24px;padding:18px 22px 16px;background:#171b1f;color:#fff;border-bottom:7px solid #6f7880}}
 .loadout-kicker{{color:#9ca5ab;font-size:15px;font-weight:900;letter-spacing:.12em}} .loadout-title{{margin-top:6px;font-size:42px;line-height:1;font-weight:950}}
 .loadout-subtitle{{margin-bottom:4px;color:#c8ced2;font-size:16px;font-weight:800;text-align:right}}
-.loadout-overview{{display:grid;grid-template-columns:420px 1fr;gap:18px;margin-top:18px}}
+.loadout-overview{{display:grid;grid-template-columns:420px 1fr;align-items:start;gap:18px;margin-top:18px}}
 .loadout-identity,.loadout-panel{{border:1px solid rgba(23,27,31,.30);background:rgba(247,248,246,.94);box-shadow:-10px 16px 38px rgba(23,27,31,.10)}}
 .loadout-identity{{padding:20px}}
 .operator-block{{display:grid;grid-template-columns:145px 1fr;gap:17px;align-items:center;padding-bottom:16px;border-bottom:5px solid #171b1f}}
@@ -1479,7 +1494,7 @@ html,body{{margin:0;width:1500px;background:#d9dde0;color:#171b1f;font-family:"M
 .operator-level{{color:#687177;font-size:14px;font-weight:900}} .operator-name{{margin-top:4px;font-size:43px;line-height:.98;font-weight:950;overflow-wrap:anywhere}}
 .operator-tags{{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}} .operator-tag{{padding:5px 9px;background:#e1e4e5;border-left:5px solid #20252a;font-size:13px;font-weight:900}}
 .weapon-block{{display:grid;grid-template-columns:105px 1fr;gap:14px;align-items:center;margin-top:15px;padding:12px;background:#e5e8e9;border:1px solid rgba(23,27,31,.20)}}
-.weapon-visual{{width:105px;height:82px;display:grid;place-items:center;background:rgba(255,255,255,.62)}} .weapon-visual img{{width:100%;height:100%;object-fit:contain}} .weapon-visual span{{color:#899197;font-weight:950}}
+.weapon-visual{{width:105px;height:105px;display:grid;place-items:center;overflow:hidden;background:rgba(255,255,255,.62)}} .weapon-visual img{{display:block;width:auto;height:auto;max-width:92%;max-height:92%;object-fit:contain;object-position:center}} .weapon-visual span{{color:#899197;font-weight:950}}
 .weapon-label{{color:#697279;font-size:12px;font-weight:900}} .weapon-name{{margin-top:3px;font-size:25px;line-height:1.05;font-weight:950}} .weapon-meta{{margin-top:5px;color:#4c565d;font-size:13px;font-weight:850}}
 .loadout-panel{{padding:18px 20px}}
 .section-title{{display:flex;align-items:center;gap:10px;margin:0 0 12px;padding-bottom:9px;border-bottom:4px solid #20252a;font-size:25px;line-height:1;font-weight:950}} .section-title::before{{content:"";width:9px;height:27px;background:#286cd6}}

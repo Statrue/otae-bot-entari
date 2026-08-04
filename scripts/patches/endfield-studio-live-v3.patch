@@ -1,0 +1,67 @@
+diff --git a/src/Endfield.BlcTool.Core/Blc/BlcParser.cs b/src/Endfield.BlcTool.Core/Blc/BlcParser.cs
+index b5efde4..cf53b9a 100644
+--- a/src/Endfield.BlcTool.Core/Blc/BlcParser.cs
++++ b/src/Endfield.BlcTool.Core/Blc/BlcParser.cs
+@@ -29,8 +29,8 @@ public static class BlcParser
+             Version = br.ReadInt32()
+         };
+ 
+-        // Skip nonce area retained in decrypted buffer layout.
+-        br.BaseStream.Seek(12, SeekOrigin.Current);
++        // Skip the remaining 8 nonce bytes plus two current-format header fields.
++        br.BaseStream.Seek(16, SeekOrigin.Current);
+         main.GroupCfgName = ReadVfsString(br);
+         main.GroupCfgHashName = ReadBEInt64Hex(br);
+         main.GroupFileInfoNum = br.ReadInt32();
+@@ -50,6 +50,8 @@ public static class BlcParser
+                 BlockType = br.ReadByte()
+             };
+ 
++            // Current format stores a reserved chunk field before the file count.
++            _ = br.ReadInt32();
+             var fileCount = br.ReadInt32();
+             chunk.Files = new List<BlcFileInfo>(Math.Max(0, fileCount));
+             // File records define how to locate bytes inside target .chk chunks.
+@@ -70,6 +72,8 @@ public static class BlcParser
+                 if (file.BUseEncrypt)
+                     file.IvSeed = br.ReadInt64();
+ 
++                // Current format terminates every file record with a reserved int32.
++                _ = br.ReadInt32();
+                 chunk.Files.Add(file);
+             }
+ 
+diff --git a/src/Endfield.Cli/Operations/ManifestAssetsYamlOperation.cs b/src/Endfield.Cli/Operations/ManifestAssetsYamlOperation.cs
+index 721b8f0..4873249 100644
+--- a/src/Endfield.Cli/Operations/ManifestAssetsYamlOperation.cs
++++ b/src/Endfield.Cli/Operations/ManifestAssetsYamlOperation.cs
+@@ -129,11 +129,28 @@ public static class ManifestAssetsYamlOperation
+         using (var writer = new StreamWriter(outputFile, false, new UTF8Encoding(false)))
+             WriteYaml(root, writer);
+ 
++        var csvFile = Path.ChangeExtension(outputFile, ".csv");
++        WriteAssetBundleCsv(manifest, csvFile);
++
+         Console.WriteLine("[STEP 6/6] Finished.");
+-        Console.WriteLine($"Done. YAML={outputFile}, Assets={manifest.Assets.Count}, DedupedRows={duplicateRowsRemoved}");
++        Console.WriteLine($"Done. YAML={outputFile}, CSV={csvFile}, Assets={manifest.Assets.Count}, DedupedRows={duplicateRowsRemoved}");
+         return 0;
+     }
+ 
++    private static void WriteAssetBundleCsv(ManifestScheme manifest, string outputFile)
++    {
++        var bundlesByIndex = manifest.Bundles.ToDictionary(x => x.BundleIndex);
++        using var writer = new StreamWriter(outputFile, false, new UTF8Encoding(false));
++        writer.WriteLine("asset_path,bundle_index,bundle_name,asset_size");
++        foreach (var asset in manifest.Assets)
++        {
++            bundlesByIndex.TryGetValue(asset.BundleIndex, out var bundle);
++            writer.WriteLine($"{Csv(asset.Path)},{asset.BundleIndex},{Csv(bundle?.Name ?? string.Empty)},{asset.AssetSize}");
++        }
++    }
++
++    private static string Csv(string value) => $"\"{value.Replace("\"", "\"\"")}\"";
++
+     private static AssetTreeNode BuildAssetTree(IEnumerable<ManifestAssetInfo> assets, out int duplicateRowsRemoved)
+     {
+         // Exact duplicates are known to exist in manifest assets. Keep a set of

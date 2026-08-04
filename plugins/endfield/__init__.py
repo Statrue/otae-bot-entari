@@ -29,6 +29,7 @@ from .account_client import (
     EndfieldAPIError,
     EndfieldOfficialClient,
     encode_account_credential,
+    decode_account_credential,
     is_asia_role,
 )
 from .account_crypto import CredentialCipher, CredentialKeyError
@@ -82,6 +83,12 @@ from .account_detail_service import build_account_detail_view
 from .account_detail_names import fetch_account_detail_name_map
 from .account_base_draw import draw_account_base_card
 from .account_base_service import build_account_base_view
+from .account_investment_draw import draw_account_investment_cards
+from .account_investment_service import (
+    InvestmentDataUnavailable,
+    build_account_investment_view,
+    fetch_account_investment_catalog,
+)
 from .stage_draw import draw_stage_card, draw_stage_catalog_cards
 from .stage_service import EndfieldStageService, StageVariantNotFound
 from .stage_source import StageDataIncomplete
@@ -271,7 +278,7 @@ async def _handle_command(matcher, event: Event, command: ParsedEndfieldCommand)
         )
     if command.action in {"medal_view", "medal_refresh"}:
         return await _handle_medal(matcher, command)
-    if command.action in {"bind", "accounts", "account_base", "primary", "unbind", "attendance", "gacha", "gacha_history", "gacha_sync", "gacha_import", "medal_missing"}:
+    if command.action in {"bind", "accounts", "account_base", "account_investment", "primary", "unbind", "attendance", "gacha", "gacha_history", "gacha_sync", "gacha_import", "medal_missing"}:
         return await _handle_personal_command(matcher, event, command)
     if command.action == "loadout":
         return await _handle_loadout(matcher, command)
@@ -466,6 +473,9 @@ async def _handle_personal_command(matcher, event: Event, command: ParsedEndfiel
         if command.action == "account_base":
             cipher = CredentialCipher.from_env()
             return await _handle_account_base(matcher, qq_user_id, command, cipher, group=is_group(event))
+        if command.action == "account_investment":
+            cipher = CredentialCipher.from_env()
+            return await _handle_account_investment(matcher, qq_user_id, command, cipher, group=is_group(event))
         if command.action == "primary":
             role = account_store.set_primary(qq_user_id, command.account_selector)
             return await matcher.finish(
@@ -496,6 +506,9 @@ async def _handle_personal_command(matcher, event: Event, command: ParsedEndfiel
     except EndfieldAPIError as exc:
         logger.warning(f"[endfield-account] official API request failed: operation={exc.operation} code={exc.code}")
         return await matcher.finish(str(exc))
+    except InvestmentDataUnavailable as exc:
+        logger.warning(f"[endfield-investment] AKEData unavailable: {exc}")
+        return await matcher.finish("终末地养成数据源暂时不可用，请稍后重试。")
     except XhhAPIError as exc:
         return await matcher.finish(str(exc))
     except aiohttp.ClientConnectionError:
@@ -751,6 +764,66 @@ async def _render_account_detail(
         name_map=name_map,
     )
     return await _finish_pngs(matcher, await draw_account_detail_cards(view))
+
+
+async def _handle_account_investment(
+    matcher,
+    qq_user_id: str,
+    command: ParsedEndfieldCommand,
+    cipher: CredentialCipher,
+    *,
+    group: bool,
+) -> None:
+    roles = account_store.list_roles(qq_user_id)
+    if not roles:
+        return await matcher.finish("尚未绑定终末地账号。使用 /zmd 绑定 开始绑定。")
+    if command.account_selector:
+        role = account_store.resolve_role(qq_user_id, command.account_selector)
+        if role is None:
+            return await matcher.finish("未找到对应账号，请使用 /zmd 账号 查看编号。")
+        return await _render_account_investment(matcher, role, cipher, group=group)
+    if len(roles) == 1:
+        return await _render_account_investment(matcher, roles[0], cipher, group=group)
+
+    answer = await prompt_silently(
+        _format_accounts(roles, reveal_uid=not group, detail_hint=True), timeout=60
+    )
+    if answer is None:
+        return await matcher.finish()
+    text = answer.extract_plain_text() if hasattr(answer, "extract_plain_text") else str(answer or "")
+    text = text.strip()
+    if not text or text.casefold() in {"取消", "cancel", "q", "quit"}:
+        return await matcher.finish("已取消账号养成统计。")
+    selection = parse_candidate_selection(text, len(roles))
+    role = roles[selection] if selection is not None else account_store.resolve_role(qq_user_id, text)
+    if role is None:
+        return await matcher.finish(f"编号无效，请输入 1-{len(roles)}。")
+    return await _render_account_investment(matcher, role, cipher, group=group)
+
+
+async def _render_account_investment(
+    matcher,
+    role: EndfieldRole,
+    cipher: CredentialCipher,
+    *,
+    group: bool,
+) -> None:
+    token = account_store.decrypt_token(role, cipher)
+    provider, _raw_token = decode_account_credential(token)
+    if provider == ACCOUNT_PROVIDER_SKPORT or is_asia_role(role):
+        return await matcher.finish("养成统计目前仅支持国服账号，亚服暂不支持。")
+    detail, catalog = await asyncio.gather(
+        official_client.card_detail(token, role),
+        fetch_account_investment_catalog(),
+    )
+    view = build_account_investment_view(
+        detail,
+        uid=role.masked_uid if group else role.role_id,
+        nickname=role.nickname,
+        server_name=role.server_name or role.server_id,
+        catalog=catalog,
+    )
+    return await _finish_pngs(matcher, await draw_account_investment_cards(view))
 
 
 async def _handle_account_base(

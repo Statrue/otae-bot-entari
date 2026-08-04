@@ -7,6 +7,277 @@ from unittest import mock
 import plugins.endfield as endfield
 from plugins.endfield import account_detail_draw, account_detail_models, commands as commands_module
 from plugins.endfield.account_store import EndfieldRole
+from plugins.endfield.account_draw import (
+    CANVAS_HEIGHT,
+    CANVAS_WIDTH,
+    FONT_ASSETS,
+    PROFILE_CANVAS_HEIGHT,
+    PROFILE_CANVAS_WIDTH,
+    UI_ASSETS,
+    _crisis_team,
+    _prepare_assets,
+    _crisis_html,
+    _indie_html,
+    _profession_icon_url,
+    _profile_html,
+    _property_icon_url,
+)
+from plugins.endfield.account_models import AccountUiPayload
+
+
+def fixture_payload() -> AccountUiPayload:
+    character = {
+        "id": "char-a",
+        "level": 90,
+        "potentialLevel": 2,
+        "charData": {
+            "name": "测试干员",
+            "rarity": {"value": "6"},
+            "property": {"value": "灼热"},
+            "avatarRtUrl": "https://assets.invalid/char.png",
+            "avatarSqUrl": "https://assets.invalid/char-square.png",
+            "illustrationUrl": "https://assets.invalid/illustration.png",
+            "skills": [
+                {"id": "normal", "name": "普通攻击", "type": {"key": "skill_type_normal_attack"}},
+                {"id": "skill-a", "name": "战技", "type": {"key": "skill_type_normal_skill"}},
+                {"id": "skill-b", "name": "连携技", "type": {"key": "skill_type_combo_skill"}},
+                {"id": "skill-c", "name": "终结技", "type": {"key": "skill_type_ultimate_skill"}},
+            ],
+        },
+        "userSkills": {
+            "normal": {"level": 1},
+            "skill-a": {"level": 9},
+            "skill-b": {"level": 10},
+            "skill-c": {"level": 9},
+        },
+        "weapon": {
+            "level": 90,
+            "breakthroughLevel": 4,
+            "refineLevel": 4,
+            "weaponData": {
+                "name": "测试武器",
+                "iconUrl": "https://assets.invalid/weapon.png",
+                "skills": [
+                    {"key": "weapon-attr-a", "value": "主能力提升"},
+                    {"key": "weapon-attr-b", "value": "攻击提升"},
+                    {"key": "weapon-skill-c", "value": "武器技能"},
+                ],
+            },
+        },
+    }
+    character["charData"]["profession"] = {"key": "profession_assault", "value": "Assault"}
+    character["charData"]["property"] = {"key": "char_property_fire", "value": "Fire"}
+    detail = {
+        "base": {
+            "roleId": "secret-role-id",
+            "name": "测试账号",
+            "level": 60,
+            "worldLevel": 7,
+            "avatarUrl": "https://assets.invalid/avatar.png",
+            "mainMission": {"description": "志同道合"},
+            "charNum": 26,
+            "weaponNum": 54,
+            "docNum": 222,
+        },
+        "chars": [character],
+        "config": {"charIds": ["char-a"]},
+        "achieve": {"achieveMedals": [], "display": {}},
+        "domain": [{"name": "四号谷地", "level": 12}],
+    }
+    crisis = {
+        "status": {"name": "重燃测试作战", "highest": 44},
+        "history": {
+            "bestRecord": {
+                "id": "record-a",
+                "indicatorCount": 44,
+                "passTs": "356",
+                "chars": [{"charId": "char-a", "level": 90, "potentialLevel": 0}],
+            }
+        },
+        "indicators": [],
+    }
+    crisis_record = {
+        "id": "record-a",
+        "chars": [
+            {
+                "charId": "char-a",
+                "level": 90,
+                "potentialLevel": 0,
+                "avatarUrl": "https://assets.invalid/record-char.png",
+                "weapon": {
+                    "level": 80,
+                    "icon": "https://assets.invalid/record-weapon.png",
+                    "weaponTerms": [9, 9, 6],
+                },
+                "equips": {
+                    "bodyEquip": {"icon": "https://assets.invalid/record-equip.png"}
+                },
+            }
+        ],
+    }
+    indie = {
+        "name": "死寂争鸣",
+        "dungeonGroups": [
+            {
+                "hardDungeon": {
+                    "name": "忿鼓咆声·苦难",
+                    "recommendLevel": 90,
+                    "isPass": True,
+                    "desc": "关卡描述",
+                    "feature": "敌人属性提升。",
+                    "enemies": [],
+                }
+            }
+        ],
+        "isInActivity": True,
+    }
+    return AccountUiPayload(detail, crisis, (indie,), crisis_record)
+
+
+class EndfieldAccountUiTests(unittest.TestCase):
+    def test_payload_reads_responses_and_respects_display_order(self):
+        payload = fixture_payload()
+        response_payload = AccountUiPayload.from_responses(
+            {"data": {"detail": payload.detail}},
+            {"data": {"crisisContract": payload.crisis_contract}},
+            {"data": {"indieHard": {"indieHardGroups": list(payload.indie_hard_groups)}}},
+            {"data": {"recordDetail": payload.crisis_record}},
+        )
+        self.assertEqual(response_payload.base["name"], "测试账号")
+        self.assertEqual(response_payload.displayed_characters()[0]["id"], "char-a")
+        self.assertEqual(response_payload.active_indie_group()["name"], "死寂争鸣")
+        self.assertEqual(response_payload.crisis_record["id"], "record-a")
+
+    def test_profile_html_matches_fixed_canvas_and_displays_role_id(self):
+        payload = fixture_payload()
+        page = _profile_html(
+            payload,
+            {"https://assets.invalid/char-square.png": "square-portrait"},
+        )
+        self.assertIn(f"width: {CANVAS_WIDTH}px", page)
+        self.assertIn(f"height: {CANVAS_HEIGHT}px", page)
+        self.assertIn(f"width: {PROFILE_CANVAS_WIDTH}px", page)
+        self.assertIn(f"height: {PROFILE_CANVAS_HEIGHT}px", page)
+        self.assertIn('class="profile-stage"', page)
+        self.assertIn("@font-face", page)
+        self.assertIn("EndfieldCN", page)
+        self.assertIn("EndfieldHUD", page)
+        self.assertIn("测试账号", page)
+        self.assertIn("四号谷地", page)
+        self.assertIn("secret-role-id", page)
+        self.assertIn("square-portrait", page)
+        self.assertNotIn("https://assets.invalid/char.png", page)
+        self.assertIn("profile-profession-8.png", page)
+        self.assertIn("profile-property-fire.png", page)
+        self.assertIn("potential-2.png", page)
+        payload.detail["chars"][0]["potentialLevel"] = 0
+        zero_potential_page = _profile_html(payload, {})
+        self.assertIn("profile-potential-0.png", zero_potential_page)
+        self.assertIn("profile-mission.png", page)
+        self.assertIn("profile-medal-deco.png", page)
+        self.assertIn("profile-medal-detail.png", page)
+        self.assertIn("profile-medal-caption.png", page)
+        self.assertIn("profile-medal-label.png", page)
+        self.assertEqual(page.count("profile-medal-entry.png"), 1)
+        self.assertNotIn('<button class="avatar-more"', page)
+        self.assertNotIn('<div class="profile-actions">', page)
+
+    def test_indie_html_contains_selected_hard_dungeon(self):
+        payload = fixture_payload()
+        group = payload.active_indie_group()
+        dungeon = group["dungeonGroups"][0]["hardDungeon"]
+        page = _indie_html(group, [dungeon], dungeon, {})
+        self.assertIn("忿鼓咆声·苦难", page)
+        self.assertIn("LV.90", page)
+        self.assertIn("已通过", page)
+
+    def test_crisis_html_contains_result_and_squad(self):
+        payload = fixture_payload()
+        character = _crisis_team(
+            payload, payload.crisis_contract["history"]["bestRecord"]
+        )[0]
+        page = _crisis_html(
+            payload,
+            payload.crisis_contract,
+            [character],
+            [],
+            {
+                "https://assets.invalid/record-char.png": "snapshot-portrait",
+                "https://assets.invalid/record-weapon.png": "snapshot-weapon",
+                "https://assets.invalid/record-equip.png": "snapshot-equip",
+            },
+        )
+        self.assertIn("行动成功", page)
+        self.assertIn("05:56", page)
+        self.assertIn('<span class="level-label">LV</span><b>90</b>', page)
+        self.assertNotIn("测试干员</strong>", page)
+        self.assertIn("potential-0.png", page)
+        self.assertIn("contract-role-watermark.png", page)
+        self.assertIn("contract-total.png", page)
+        self.assertEqual(page.count(">9</b>"), 2)
+        self.assertEqual(page.count(">6</b>"), 1)
+        self.assertIn("snapshot-weapon", page)
+        self.assertIn("snapshot-equip", page)
+        self.assertNotIn("https://assets.invalid/weapon.png", page)
+        self.assertNotIn("行动结束", page)
+        self.assertNotIn('class="action-buttons"', page)
+        self.assertNotIn('class="crisis-footer"', page)
+        self.assertNotIn('class="operator-badges"', page)
+        self.assertIn('class="hud-icon stat-watermark"', page)
+
+    def test_pages_use_local_game_ui_assets_without_text_placeholders(self):
+        payload = fixture_payload()
+        profile = _profile_html(payload, {})
+        group = payload.active_indie_group()
+        dungeon = group["dungeonGroups"][0]["hardDungeon"]
+        indie = _indie_html(group, [dungeon], dungeon, {})
+        crisis = _crisis_html(payload, payload.crisis_contract, [payload.characters[0]], [], {})
+
+        self.assertIn('class="profile-bg"', profile)
+        self.assertNotIn("profile-personal.png", profile)
+        self.assertNotIn("common-close.png", profile)
+        self.assertIn("dungeon-more.png", indie)
+        self.assertIn("contract-total.png", crisis)
+        self.assertNotIn("common-confirm.png", crisis)
+        for page in (profile, indie, crisis):
+            for placeholder in ("•••", "↻", "✓　完成", "↗"):
+                self.assertNotIn(placeholder, page)
+
+    def test_crisis_header_image_is_rendered(self):
+        payload = fixture_payload()
+        payload.crisis_contract["status"]["headerImage"] = "https://assets.invalid/header.png"
+        page = _crisis_html(
+            payload,
+            payload.crisis_contract,
+            [payload.characters[0]],
+            [],
+            {"https://assets.invalid/header.png": "data:image/png;base64,header"},
+        )
+        self.assertIn('class="crisis-header-art"', page)
+        self.assertIn("data:image/png;base64,header", page)
+
+    def test_warfarin_semantic_icon_urls_match_endfield_keys(self):
+        self.assertEqual(
+            _profession_icon_url("profession_assault"),
+            "https://static.warfarin.wiki/v4/charprofessionicon/icon_profession_8_s.webp",
+        )
+        self.assertEqual(
+            _property_icon_url("char_property_fire"),
+            "https://static.warfarin.wiki/v4/elementicon/icon_charattrtype_fire.webp",
+        )
+
+
+class EndfieldAccountUiAsyncTests(unittest.IsolatedAsyncioTestCase):
+    async def test_prepare_assets_registers_local_ui_fonts_and_icons(self):
+        prepared = await _prepare_assets([], inline=False)
+        for virtual_url, path, _weight in FONT_ASSETS.values():
+            self.assertTrue(path.exists())
+            self.assertIn(virtual_url, prepared.urls)
+            self.assertIn(virtual_url, prepared.resources)
+        for virtual_url, path in UI_ASSETS.values():
+            self.assertTrue(path.exists())
+            self.assertIn(virtual_url, prepared.urls)
+            self.assertIn(virtual_url, prepared.resources)
 
 
 class EndfieldAccountDetailDrawTests(unittest.TestCase):
@@ -315,8 +586,8 @@ class EndfieldAccountDetailPaginationTests(unittest.IsolatedAsyncioTestCase):
 class EndfieldAccountDetailRoutingTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.roles = [
-            EndfieldRole(1, 1, "qq", "b1", "1000000001", "1", "甲", "China", True),
-            EndfieldRole(2, 1, "qq", "b2", "1000000002", "1", "乙", "China", False),
+            EndfieldRole(1, 1, "qq", "b1", "1770431209", "1", "甲", "China", True),
+            EndfieldRole(2, 1, "qq", "b2", "1770431888", "1", "乙", "China", False),
         ]
 
     def patched(self, *, group: bool, roles):
@@ -366,9 +637,9 @@ class EndfieldAccountDetailRoutingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_private_chat_reveals_uid_and_group_masks_it(self):
         _, _, _, _, draw, _ = await self.run_accounts(group=False, roles=self.roles[:1])
-        self.assertEqual(draw.await_args.args[0].uid, "1000000001")
+        self.assertEqual(draw.await_args.args[0].uid, "1770431209")
         _, _, _, _, masked_draw, _ = await self.run_accounts(group=True, roles=self.roles[:1])
-        self.assertEqual(masked_draw.await_args.args[0].uid, "****0001")
+        self.assertEqual(masked_draw.await_args.args[0].uid, "****1209")
 
     async def test_multiple_accounts_prompt_with_detail_hint(self):
         _, prompt, detail, _, _, _ = await self.run_accounts(group=False, roles=self.roles)
@@ -382,8 +653,8 @@ class EndfieldAccountDetailRoutingTests(unittest.IsolatedAsyncioTestCase):
     async def test_group_listing_hides_full_uid(self):
         _, prompt, _, _, _, _ = await self.run_accounts(group=True, roles=self.roles)
         listing = prompt.await_args.args[0]
-        self.assertIn("****0001", listing)
-        self.assertNotIn("1000000001", listing)
+        self.assertIn("****1209", listing)
+        self.assertNotIn("1770431209", listing)
 
     async def test_reply_number_selects_the_matching_account(self):
         reply = mock.Mock()

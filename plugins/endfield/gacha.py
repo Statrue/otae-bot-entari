@@ -36,6 +36,14 @@ SIX_STAR_COMPREHENSIVE_RATES = {
 UP_COMPREHENSIVE_RATES = {
     "武器": (0.018533, 0.018678),
 }
+FREE_SIX_STAR_BASE_RATES = {
+    "角色": 0.008,
+    "武器": 0.04,
+}
+FREE_UP_BASE_RATES = {
+    "角色": 0.004,
+    "武器": 0.01,
+}
 
 
 class TaskAlreadyRunning(RuntimeError):
@@ -156,12 +164,17 @@ class KeepsakeGift:
 class SixStarExpectation:
     before_up: float
     after_up: float
+    combined_before_up: float | None
+    combined_after_up: float | None
     actual: float | None
     paid_pulls: int
+    free_pulls: int
     account_pulls: int
     outcomes: int
     up_before: float
     up_after: float | None
+    up_combined_before: float | None
+    up_combined_after: float | None
     actual_up: float | None
     up_outcomes: int
 
@@ -747,7 +760,8 @@ def calculate_six_star_expectation(
         pool.paid_total if pool.paid_total or pool.free_pull_count else pool.total
         for pool in selected
     )
-    account_pulls = paid_pulls + sum(pool.free_pull_count for pool in selected)
+    free_pulls = sum(pool.free_pull_count for pool in selected)
+    account_pulls = paid_pulls + free_pulls
     outcomes = sum(
         len(pool.six_stars)
         + sum(len(batch.six_stars) for batch in pool.free_batches)
@@ -771,18 +785,50 @@ def calculate_six_star_expectation(
         up_before_rate, up_after_rate = UP_COMPREHENSIVE_RATES[item_type]
         up_before = 1 / up_before_rate
         up_after = 1 / up_after_rate
+    combined_before_up = _combined_expectation(
+        paid_pulls, free_pulls, before_rate, FREE_SIX_STAR_BASE_RATES[item_type],
+    )
+    combined_after_up = _combined_expectation(
+        paid_pulls, free_pulls, after_rate, FREE_SIX_STAR_BASE_RATES[item_type],
+    )
+    up_combined_before = _combined_expectation(
+        paid_pulls, free_pulls, 1 / up_before, FREE_UP_BASE_RATES[item_type],
+    )
+    up_combined_after = (
+        _combined_expectation(
+            paid_pulls, free_pulls, 1 / up_after, FREE_UP_BASE_RATES[item_type],
+        )
+        if up_after is not None else None
+    )
     return SixStarExpectation(
         before_up=1 / before_rate,
         after_up=1 / after_rate,
+        combined_before_up=combined_before_up,
+        combined_after_up=combined_after_up,
         actual=account_pulls / outcomes if outcomes else None,
         paid_pulls=paid_pulls,
+        free_pulls=free_pulls,
         account_pulls=account_pulls,
         outcomes=outcomes,
         up_before=up_before,
         up_after=up_after,
+        up_combined_before=up_combined_before,
+        up_combined_after=up_combined_after,
         actual_up=account_pulls / up_outcomes if up_outcomes else None,
         up_outcomes=up_outcomes,
     )
+
+
+def _combined_expectation(
+    paid_pulls: int,
+    free_pulls: int,
+    paid_rate: float,
+    free_rate: float,
+) -> float | None:
+    expected_outcomes = paid_pulls * paid_rate + free_pulls * free_rate
+    if not expected_outcomes:
+        return None
+    return (paid_pulls + free_pulls) / expected_outcomes
 
 
 def _character_first_up_expectation() -> float:

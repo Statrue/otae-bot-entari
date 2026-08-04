@@ -526,7 +526,7 @@ async def _handle_personal_command(matcher, event: Event, command: ParsedEndfiel
 
 async def _handle_binding(matcher, qq_user_id: str, cipher: CredentialCipher) -> None:
     region = await _prompt_text(
-        "请选择服务器：\n1. 国服（森空岛，支持 Token/短信/扫码）\n"
+        "请选择服务器：\n1. 国服（森空岛，支持 Token/短信；二维码绑定暂不支持）\n"
         "2. 亚服（SKPORT，当前仅支持 Token）\n"
         "回复 1 或 2；回复“取消”退出。",
         timeout=90,
@@ -596,8 +596,9 @@ async def _handle_binding(matcher, qq_user_id: str, cipher: CredentialCipher) ->
 
 async def _bind_cn_account_token(matcher) -> str | None:
     method = await _prompt_text(
-        "请选择绑定方式：\n1. Token 绑定\n2. 手机号验证码绑定\n3. 二维码扫码绑定\n"
-        "可重复绑定其他鹰角账号，已有账号不会被覆盖。\n回复 1、2 或 3；回复“取消”退出。",
+        "请选择绑定方式：\n1. Token 绑定\n2. 手机号验证码绑定\n"
+        "二维码绑定暂不支持。\n"
+        "可重复绑定其他鹰角账号，已有账号不会被覆盖。\n回复 1 或 2；回复“取消”退出。",
         timeout=90,
     )
     if method is None:
@@ -630,54 +631,59 @@ async def _bind_cn_account_token(matcher) -> str | None:
             await matcher.finish("验证码格式不正确，绑定已取消。")
             return None
         account_token = await official_client.token_by_phone_code(phone, code)
-    elif normalized in {"3", "二维码", "扫码", "qr", "qrcode"}:
-        account_token = await _bind_cn_qr_account(matcher)
-        if account_token is None:
-            return None
+    # 暂时禁用二维码绑定，保留以下代码以便后续恢复：
+    # elif normalized in {"3", "二维码", "扫码", "qr", "qrcode"}:
+    #     account_token = await _bind_cn_qr_account(matcher)
+    #     if account_token is None:
+    #         return None
     else:
-        await matcher.finish("未识别绑定方式，绑定已取消。")
+        if normalized in {"3", "二维码", "扫码", "qr", "qrcode"}:
+            await matcher.finish("二维码绑定暂不支持，请选择 1 或 2。")
+        else:
+            await matcher.finish("未识别绑定方式，绑定已取消。")
         return None
     return encode_account_credential(account_token, ACCOUNT_PROVIDER_CN)
 
 
-async def _bind_cn_qr_account(matcher) -> str | None:
-    ticket = await official_client.create_qr_login()
-    qr_png = _render_qr_png(ticket.scan_url)
-    await matcher.send(
-        "请使用森空岛或《明日方舟：终末地》App 扫描下方二维码并确认登录。"
-        "二维码有效期较短，请勿转发给他人。"
-    )
-    await matcher.send(ChainMsg([make_image(raw=qr_png)]))
-
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + 150
-    scan_notice_sent = False
-    while loop.time() < deadline:
-        status = await official_client.check_qr_login(ticket.scan_id)
-        if status.state == "confirmed":
-            return await official_client.token_by_scan_code(status.scan_code)
-        if status.state == "scanned" and not scan_notice_sent:
-            await matcher.send("扫码成功，请在手机上确认登录。")
-            scan_notice_sent = True
-        if status.state == "expired":
-            await matcher.finish("二维码已过期，请重新执行绑定命令。")
-            return None
-        await asyncio.sleep(min(2, max(0, deadline - loop.time())))
-
-    await matcher.finish("等待扫码确认超时，请重新执行绑定命令。")
-    return None
-
-
-def _render_qr_png(content: str) -> bytes:
-    import cv2
-
-    matrix = cv2.QRCodeEncoder_create().encode(content)
-    matrix = cv2.copyMakeBorder(matrix, 4, 4, 4, 4, cv2.BORDER_CONSTANT, value=255)
-    matrix = cv2.resize(matrix, None, fx=10, fy=10, interpolation=cv2.INTER_NEAREST)
-    encoded, png = cv2.imencode(".png", matrix)
-    if not encoded:
-        raise RuntimeError("二维码图片生成失败")
-    return png.tobytes()
+# 暂时注释二维码绑定实现；恢复时一并取消本段注释。
+# async def _bind_cn_qr_account(matcher) -> str | None:
+#     ticket = await official_client.create_qr_login()
+#     qr_png = _render_qr_png(ticket.scan_url)
+#     await matcher.send(
+#         "请使用森空岛或《明日方舟：终末地》App 扫描下方二维码并确认登录。"
+#         "二维码有效期较短，请勿转发给他人。"
+#     )
+#     await matcher.send(ChainMsg([make_image(raw=qr_png)]))
+#
+#     loop = asyncio.get_running_loop()
+#     deadline = loop.time() + 150
+#     scan_notice_sent = False
+#     while loop.time() < deadline:
+#         status = await official_client.check_qr_login(ticket.scan_id)
+#         if status.state == "confirmed":
+#             return await official_client.token_by_scan_code(status.scan_code)
+#         if status.state == "scanned" and not scan_notice_sent:
+#             await matcher.send("扫码成功，请在手机上确认登录。")
+#             scan_notice_sent = True
+#         if status.state == "expired":
+#             await matcher.finish("二维码已过期，请重新执行绑定命令。")
+#             return None
+#         await asyncio.sleep(min(2, max(0, deadline - loop.time())))
+#
+#     await matcher.finish("等待扫码确认超时，请重新执行绑定命令。")
+#     return None
+#
+#
+# def _render_qr_png(content: str) -> bytes:
+#     import cv2
+#
+#     matrix = cv2.QRCodeEncoder_create().encode(content)
+#     matrix = cv2.copyMakeBorder(matrix, 4, 4, 4, 4, cv2.BORDER_CONSTANT, value=255)
+#     matrix = cv2.resize(matrix, None, fx=10, fy=10, interpolation=cv2.INTER_NEAREST)
+#     encoded, png = cv2.imencode(".png", matrix)
+#     if not encoded:
+#         raise RuntimeError("二维码图片生成失败")
+#     return png.tobytes()
 
 
 async def _select_binding_roles(roles: list[RoleCandidate]) -> list[RoleCandidate] | None:

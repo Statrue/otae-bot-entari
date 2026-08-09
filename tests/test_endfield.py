@@ -1898,6 +1898,37 @@ class EndfieldServiceTests(unittest.TestCase):
 
         self.assertEqual({row.key: row.value for row in view.ability_stats}["Will"], "78")
 
+    def test_loadout_applies_weapon_main_attribute_multiplier(self):
+        operator = copy.deepcopy(_sample_loadout_operator())
+        attrs = operator["revision"]["contentJson"]["content"][0]["attrs"]
+        strength_row = next(row for row in attrs["attributes"]["rows"] if row["key"] == "Str")
+        strength_row["cells"] = [["723.1"]]
+
+        weapon = copy.deepcopy(_sample_loadout_weapon())
+        weapon["revision"]["contentJson"]["content"][0]["attrs"]["skills"]["skills"] = [
+            {
+                "name": "主能力提升",
+                "description": "主能力+{primary_attr_up:0.0%}",
+                "zeroPotentialMaxLevel": 9,
+                "levels": [{"level": 9, "values": {"primary_attr_up": 0.448}}],
+            }
+        ]
+
+        equipment = _sample_loadout_equipment("Body")
+        equipment["revision"]["contentJson"]["content"][0]["attrs"]["stats"]["rows"] = [
+            {
+                "label": "主能力",
+                "values": [0.538, 0.538, 0.538, 0.538],
+                "attrType": "Level",
+                "compositeAttr": "Main",
+                "modifierType": "BaseMultiplier",
+            }
+        ]
+
+        view = build_fz_loadout_view(operator, weapon, [(equipment, 3, ())])
+
+        self.assertEqual({row.key: row.value for row in view.ability_stats}["Str"], "1436")
+
     def test_equipment_composite_fixed_values_ignore_incorrect_percent_flag(self):
         equipment = _sample_loadout_equipment("Hand")
         rows = [

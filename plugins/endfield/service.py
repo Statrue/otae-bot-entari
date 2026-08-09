@@ -1038,6 +1038,9 @@ LOADOUT_EFFECT_KEY_TARGETS = {
     "will": "Will",
     "atk": "AtkPercent",
     "atk_up": "AtkPercent",
+    "primary_attr_up": "MainPercent",
+    "main_attr_up": "MainPercent",
+    "main_attribute_up": "MainPercent",
     "hp_up": "MaxHpFinal",
     "max_hp": "MaxHpFinal",
     "critical_rate": "CriticalRate",
@@ -1219,6 +1222,9 @@ def build_fz_loadout_view(
                 effects,
             )
 
+    main_percent = additions.pop("MainPercent", 0.0)
+    if main_percent:
+        base_multipliers[main_key] = base_multipliers.get(main_key, 0.0) + main_percent
     sub_percent = additions.pop("SubPercent", 0.0)
     if sub_percent:
         base_multipliers[sub_key] = base_multipliers.get(sub_key, 0.0) + sub_percent
@@ -1686,6 +1692,7 @@ def _loadout_effect_target(key: str, clause: str, *, allow_label_fallback: bool)
         ("暴击伤害", "CriticalDamageIncrease"),
         ("暴击率", "CriticalRate"),
         ("治疗效率", "HealOutputIncrease"),
+        ("主能力", "MainPercent"),
         ("副能力", "SubPercent"),
         ("终结技充能效率", "UltimateSpGainScalar"),
         ("源石技艺强度", "PhysicalAndSpellInflictionEnhance"),

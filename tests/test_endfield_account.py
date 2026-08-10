@@ -3003,6 +3003,32 @@ class EndfieldGachaServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((pool.total, pool.paid_total, pool.free_pull_count), (45, 35, 10))
         self.assertEqual([item.name for item in pool.free_batches[0].six_stars], ["莱万汀"])
 
+    def test_xhh_special_free_ten_requires_thirty_paid_pulls(self):
+        def snapshot(total_count: int, *, free_count: int = 0):
+            return store_module.XhhGachaPool(
+                "special", "熔火灼痕", "special", "角色", total_count,
+                free_count=free_count,
+            )
+
+        self.assertEqual(gacha_module._xhh_expected_free_pull_count(snapshot(10)), 0)
+        self.assertEqual(gacha_module._xhh_expected_free_pull_count(snapshot(29)), 0)
+        self.assertEqual(gacha_module._xhh_expected_free_pull_count(snapshot(30)), 10)
+        self.assertEqual(
+            gacha_module._xhh_expected_free_pull_count(snapshot(10, free_count=10)),
+            10,
+        )
+
+        imported = store_module.XhhGachaImport(
+            source_uid="role", nickname="甲", total_count=10, imported_at=456,
+            pools=(snapshot(10),), six_stars=(),
+        )
+        pool = gacha_module.build_gacha_analysis(
+            self.role, [], [], xhh_import=imported,
+        ).pools[0]
+
+        self.assertEqual((pool.total, pool.paid_total, pool.free_pull_count), (10, 10, 0))
+        self.assertEqual(pool.free_batches, ())
+
     def test_beginner_pool_marks_fortieth_pull_as_large_guarantee(self):
         imported = store_module.XhhGachaImport(
             source_uid="role", nickname="甲", total_count=40, imported_at=456,

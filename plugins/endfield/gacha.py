@@ -29,6 +29,7 @@ POOL_TYPE_LABELS = {
 }
 OFFICIAL_GACHA_LOOKBACK_DAYS = 90
 XHH_PRIORITY_BOUNDARY_MARGIN_DAYS = 30
+SPECIAL_POOL_FREE_TEN_UNLOCK_PULLS = 30
 SIX_STAR_COMPREHENSIVE_RATES = {
     "角色": (0.020387, 0.022720),
     "武器": (0.053546, 0.062212),
@@ -1101,7 +1102,12 @@ def _xhh_expected_free_pull_count(snapshot: XhhGachaPool) -> int:
         return 0
     if any(marker in identity for marker in ("joint", "standard", "beginner")):
         return 0
-    return 10 if "special" in identity else 0
+    return (
+        10
+        if "special" in identity
+        and snapshot.total_count >= SPECIAL_POOL_FREE_TEN_UNLOCK_PULLS
+        else 0
+    )
 
 
 def _xhh_large_pity_consumption(

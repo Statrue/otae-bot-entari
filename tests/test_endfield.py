@@ -325,6 +325,16 @@ class EndfieldCommandParserTests(unittest.TestCase):
         self.assertEqual(aliases.alias_targets("weapon", "228"), ())
         self.assertEqual(aliases.aliases_for("weapon", "不存在的武器"), ())
 
+    def test_alias_library_includes_latest_operator_and_weapon_aliases(self):
+        self.assertEqual(aliases.alias_targets("operator", "1f"), ("伊冯",))
+        self.assertEqual(aliases.alias_targets("operator", "等我启动"), ("庄方宜",))
+        self.assertEqual(aliases.alias_targets("operator", "🍐"), ("梨诺",))
+        self.assertEqual(commands.score_entity_candidate("operator", "🍐", "梨诺"), 100)
+        self.assertEqual(aliases.alias_targets("operator", "呼呼呼和哐哐哐的孩子"), ())
+        self.assertEqual(aliases.alias_targets("weapon", "冰之哀伤"), ("赫拉芬格",))
+        self.assertEqual(aliases.alias_targets("weapon", "火之高兴"), ("熔铸火焰",))
+        self.assertEqual(aliases.alias_targets("weapon", "麦克风"), ("曜夜的首演",))
+
     def test_candidate_resolvers_require_source_verified_entities(self):
         source = (ROOT / "plugins/endfield/__init__.py").read_text(encoding="utf-8")
 

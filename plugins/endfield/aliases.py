@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 from functools import lru_cache
 from pathlib import Path
 
@@ -109,7 +110,18 @@ def _normalize_kind(kind: str) -> str:
 
 
 def _normalize(value: str) -> str:
-    return "".join(char for char in str(value or "").casefold() if char.isalnum())
+    return normalize_alias_text(value)
+
+
+def normalize_alias_text(value: str) -> str:
+    folded = str(value or "").casefold()
+    normalized = "".join(char for char in folded if char.isalnum())
+    if normalized:
+        return normalized
+    return "".join(
+        char for char in folded
+        if unicodedata.category(char).startswith("S")
+    )
 
 
 def _render_alias_data(raw: dict[str, object]) -> str:

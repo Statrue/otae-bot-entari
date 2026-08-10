@@ -7,7 +7,7 @@ from typing import Iterable, Sequence
 
 from pypinyin import Style, lazy_pinyin
 
-from .aliases import aliases_for
+from .aliases import aliases_for, normalize_alias_text
 from .sources import normalize_source, source_labels, source_order
 
 
@@ -826,7 +826,7 @@ def _split(text: str) -> list[str]:
 
 
 def _normalize(text: str) -> str:
-    return "".join(char for char in str(text or "").lower() if char.isalnum())
+    return normalize_alias_text(text)
 
 
 def _search_keys(text: str) -> tuple[str, str]:

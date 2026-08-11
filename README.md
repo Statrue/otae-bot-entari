@@ -19,9 +19,19 @@ Direct start:
 
 ## Satori
 
-`entari.yml` is configured from the migrated `.env` `SATORI_CLIENTS` value.
-If Satori/LLOneBot is not running on the same machine, update the `host` value in
-`entari.yml`.
+The entrypoint reads `SATORI_CLIENTS` from `.env`. Each object in the list creates
+one Satori WebSocket connection, so one Entari backend can connect to multiple
+LLOneBot accounts/endpoints:
+
+```dotenv
+SATORI_CLIENTS=[{"host":"127.0.0.1","port":5500,"path":"","token":"TOKEN_1"},{"host":"127.0.0.1","port":5501,"path":"","token":"TOKEN_2"}]
+```
+
+Use the Satori WebSocket port and token configured in each LLOneBot instance.
+When several instances run on the same host, give them different ports. If the
+Satori server exposes several logins through one endpoint, that endpoint only
+needs one list entry. `entari.yml` is not the network source for this custom
+`bot.py` entrypoint.
 
 ## Deploy To Windows Server
 

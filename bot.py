@@ -43,14 +43,20 @@ def _acquire_run_lock():
     return lock_file
 
 
-def _network() -> WS:
-    client = SATORI_CLIENTS[0] if SATORI_CLIENTS else {}
+def _network(client: dict | None = None) -> WS:
+    client = client or {}
     return WS(
         host=str(client.get("host", "localhost")),
         port=int(client.get("port", 5500)),
         path=str(client.get("path", "")),
         token=str(client.get("token", "")) or None,
     )
+
+
+def _networks() -> list[WS]:
+    """Build one Satori connection for every configured LLOneBot endpoint."""
+    clients = SATORI_CLIENTS or [{}]
+    return [_network(client) for client in clients]
 
 
 _RUN_LOCK = None
@@ -62,7 +68,7 @@ if __name__ == "__main__":
         sys.exit(2)
 
 
-app = Entari(_network())
+app = Entari(*_networks())
 
 
 @listen(Cleanup)

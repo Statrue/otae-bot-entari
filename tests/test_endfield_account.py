@@ -56,6 +56,7 @@ account_detail_models_module = _load(
 account_detail_module = _load(
     f"{PACKAGE}.account_detail_service", "plugins/endfield/account_detail_service.py"
 )
+account_detail_names_module = sys.modules[f"{PACKAGE}.account_detail_names"]
 account_base_models_module = _load(
     f"{PACKAGE}.account_base_models", "plugins/endfield/account_base_models.py"
 )
@@ -279,7 +280,7 @@ class EndfieldAccountDetailViewTests(unittest.TestCase):
         view = self.build()
         self.assertEqual(
             (view.nickname, view.uid, view.server_name, view.level, view.world_level, view.main_mission),
-            ("测试管理员", "****1234", "China", 60, 7, "余晖未却"),
+            ("测试管理员", "****1234", "国服", 60, 7, "余晖未却"),
         )
         stats = {stat.label: stat.value for stat in view.stats}
         self.assertEqual(
@@ -308,6 +309,32 @@ class EndfieldAccountDetailViewTests(unittest.TestCase):
         )
         self.assertEqual((veteran.profession, veteran.element, veteran.weapon_type), ("近卫", "寒冷", "单手剑"))
         self.assertEqual(veteran.element_color, account_detail_module.ELEMENT_COLORS["char_property_cryst"])
+
+    def test_localizes_semantic_labels_from_keys(self):
+        detail = account_detail_fixture()
+        veteran = detail["chars"][1]
+        veteran["charData"]["profession"]["value"] = "Guard"
+        veteran["charData"]["property"]["value"] = "Cryst"
+        veteran["charData"]["weaponType"]["value"] = "Sword"
+        veteran["charData"]["skills"][0]["type"]["value"] = "Normal Attack"
+        veteran["charData"]["skills"][0]["property"]["value"] = "Physical"
+        veteran["weapon"]["weaponData"]["type"] = {
+            "key": "weapon_type_sword", "value": "Sword"
+        }
+        veteran["bodyEquip"]["equipData"]["type"]["value"] = "Body"
+
+        view = account_detail_module.build_account_detail_view(
+            detail, uid="uid", server_name="China"
+        )
+        operator = view.operators[0]
+        self.assertEqual(
+            (view.server_name, operator.profession, operator.element, operator.weapon_type),
+            ("国服", "近卫", "寒冷", "单手剑"),
+        )
+        self.assertEqual(operator.skills[0].type_label, "普通攻击")
+        self.assertEqual(operator.skills[0].damage_type, "物理")
+        self.assertEqual(operator.weapon.type_label, "单手剑")
+        self.assertEqual(operator.equips[0].type_label, "护甲")
 
     def test_pairs_skill_levels_by_chardata_order(self):
         veteran = self.build().operators[0]
@@ -480,7 +507,7 @@ class EndfieldAccountBaseViewTests(unittest.TestCase):
         self.store.close()
         self.temp.cleanup()
 
-    def build(self, detail: dict | None = None):
+    def build(self, detail: dict | None = None, *, name_map=None):
         return account_base_service_module.build_account_base_view(
             detail or account_base_fixture(),
             uid="****1234",
@@ -488,6 +515,7 @@ class EndfieldAccountBaseViewTests(unittest.TestCase):
             server_id="1",
             nickname="备用昵称",
             store=self.store,
+            name_map=name_map,
         )
 
     def test_reads_settlements_rooms_and_active_mood_nodes(self):
@@ -497,6 +525,7 @@ class EndfieldAccountBaseViewTests(unittest.TestCase):
             (view.nickname, view.uid, settlement.name, settlement.officer_name),
             ("测试管理员", "****1234", "天王坪援建点", "派驻员"),
         )
+        self.assertEqual(view.server_name, "国服")
         self.assertEqual([room.name for room in view.rooms], ["总控中枢", "制造舱 I"])
         worker = view.rooms[1].operators[0]
         self.assertEqual(worker.name, "工作员")
@@ -512,6 +541,33 @@ class EndfieldAccountBaseViewTests(unittest.TestCase):
             ),
             "chr_0017_yvonne",
         )
+
+    def test_prefers_akedata_i18n_for_operator_and_spaceship_skill_labels(self):
+        names = account_detail_names_module.AccountDetailNameMap(
+            character_names={
+                "chr_worker": "本地化干员",
+                "chr_control": "本地化中枢干员",
+            },
+            spaceship_skill_names={
+                "spaceship_skill_test_2_2": "本地化制造技能",
+                "spaceship_skill_control_1_2": "本地化中枢技能",
+            },
+            spaceship_skill_descriptions={
+                "spaceship_skill_test_2_2": "进驻制造舱时，舱室内干员心情消耗降低 8%",
+                "spaceship_skill_control_1_2": "进驻总控中枢时，所有干员心情恢复提升 12%",
+            },
+        )
+
+        view = self.build(name_map=names)
+        worker = view.rooms[1].operators[0]
+        control = view.rooms[0].operators[0]
+
+        self.assertEqual(worker.name, "本地化干员")
+        self.assertEqual(worker.skills[0].name, "本地化制造技能")
+        self.assertEqual(worker.skills[0].description, "进驻制造舱时，舱室内干员心情消耗降低 8%")
+        self.assertAlmostEqual(worker.drain_percent_per_hour, 7.2 * 0.92)
+        self.assertEqual(control.name, "本地化中枢干员")
+        self.assertAlmostEqual(control.recovery_percent_per_hour, 12.0 * 1.12)
 
     def test_first_snapshot_is_pending_then_rate_is_sampled(self):
         first = self.build(account_base_fixture(current_ts=1000, money=1000))

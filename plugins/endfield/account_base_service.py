@@ -15,6 +15,8 @@ from .account_base_models import (
     SettlementView,
     SpaceshipRoomView,
 )
+from .account_detail_names import AccountDetailNameMap
+from .account_i18n import server_label
 from .account_store import EndfieldStore, SettlementSnapshot
 from .gacha import format_timestamp
 
@@ -42,6 +44,7 @@ def build_account_base_view(
     server_name: str = "",
     store: EndfieldStore | None = None,
     captured_at: int | None = None,
+    name_map: AccountDetailNameMap | None = None,
 ) -> AccountBaseView:
     detail = detail or {}
     base = _mapping(detail.get("base"))
@@ -50,7 +53,8 @@ def build_account_base_view(
         or _int_or_none(detail.get("currentTs"))
         or int(time.time())
     )
-    characters = _character_index(detail)
+    names = name_map or AccountDetailNameMap()
+    characters = _character_index(detail, names)
     current_snapshots: list[SettlementSnapshot] = []
     regions: list[SettlementRegionView] = []
 
@@ -125,7 +129,7 @@ def build_account_base_view(
     return AccountBaseView(
         nickname=_text(base.get("name")) or nickname or "未知管理员",
         uid=str(uid or "--"),
-        server_name=server_name or _text(base.get("serverName")),
+        server_name=server_label(server_name or _text(base.get("serverName"))),
         saved_at=format_timestamp(current_ts),
         regions=tuple(regions),
         rooms=rooms,
@@ -324,7 +328,9 @@ def _mood_effect(description: str) -> str:
     return ""
 
 
-def _character_index(detail: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+def _character_index(
+    detail: Mapping[str, Any], name_map: AccountDetailNameMap
+) -> dict[str, Mapping[str, Any]]:
     result: dict[str, Mapping[str, Any]] = {}
     for raw_character in _sequence(detail.get("chars")):
         character = _mapping(raw_character)
@@ -337,15 +343,27 @@ def _character_index(detail: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
         active_skills = tuple(
             {
                 "id": _text(skill.get("id")),
-                "name": _text(skill.get("name")),
-                "description": _text(skill.get("desc")),
+                "name": _mapped_text(
+                    name_map.spaceship_skill_names,
+                    skill.get("id"),
+                    skill.get("name"),
+                ),
+                "description": _mapped_text(
+                    name_map.spaceship_skill_descriptions,
+                    skill.get("id"),
+                    skill.get("desc"),
+                ),
                 "icon_url": _text(skill.get("iconUrl")),
             }
             for item in _sequence(char_data.get("cultivationTalents"))
             if (skill := _mapping(item)) and _text(skill.get("id")) in active_ids
         )
         record: Mapping[str, Any] = {
-            "name": _text(char_data.get("name")),
+            "name": _mapped_text(
+                name_map.character_names,
+                char_data.get("id") or character.get("charId") or character.get("id"),
+                char_data.get("name"),
+            ),
             "avatar_url": _text(char_data.get("avatarSqUrl")),
             "skills": active_skills,
         }
@@ -405,6 +423,15 @@ def _text(value: Any) -> str:
     if value is None or isinstance(value, (dict, list, tuple)):
         return ""
     return str(value).strip()
+
+
+def _mapped_text(names: Mapping[str, str], identifier: Any, fallback: Any) -> str:
+    key = _text(identifier)
+    if key:
+        value = _text(names.get(key))
+        if value:
+            return value
+    return _text(fallback)
 
 
 def _int_or_none(value: Any) -> int | None:

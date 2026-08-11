@@ -875,7 +875,18 @@ async def _render_account_base(
     group: bool,
 ) -> None:
     token = account_store.decrypt_token(role, cipher)
-    detail = await official_client.card_detail(token, role)
+
+    async def load_name_map():
+        try:
+            return await fetch_account_detail_name_map()
+        except Exception as exc:
+            logger.warning(f"[endfield] account AKE name map unavailable: {exc}")
+            return None
+
+    detail, name_map = await asyncio.gather(
+        official_client.card_detail(token, role),
+        load_name_map(),
+    )
     view = build_account_base_view(
         detail,
         uid=role.masked_uid if group else role.role_id,
@@ -884,6 +895,7 @@ async def _render_account_base(
         nickname=role.nickname,
         server_name=role.server_name or role.server_id,
         store=account_store,
+        name_map=name_map,
     )
     return await _finish_pngs(matcher, (await draw_account_base_card(view),))
 

@@ -39,6 +39,15 @@ class EndfieldAccountDetailNameTests(unittest.TestCase):
                 "4": "中文装备",
                 "5": "中文套装",
                 "6": "物品中文武器",
+                "7": "基建技能",
+                "8": "进驻制造舱时，舱室内干员心情消耗降低 8%",
+            },
+            spaceship_skill_table={
+                "spaceship_skill_chr_1_1_1": {
+                    "id": "spaceship_skill_chr_1_1_1",
+                    "name": {"id": 7, "text": ""},
+                    "desc": {"id": 8, "text": ""},
+                }
             },
             version="test-version",
         )
@@ -50,6 +59,22 @@ class EndfieldAccountDetailNameTests(unittest.TestCase):
         self.assertEqual(self.name_map.weapon_names["wpn_1"], "物品中文武器")
         self.assertEqual(self.name_map.item_names["item_1"], "中文装备")
         self.assertEqual(self.name_map.suit_names["suit_1"], "中文套装")
+        self.assertEqual(self.name_map.spaceship_skill_names["spaceship_skill_chr_1_1_1"], "基建技能")
+        self.assertEqual(
+            self.name_map.spaceship_skill_descriptions["spaceship_skill_chr_1_1_1"],
+            "进驻制造舱时，舱室内干员心情消耗降低 8%",
+        )
+
+    def test_resolves_object_shaped_i18n_values(self):
+        name_map = build_account_detail_name_map(
+            {"chr_1": {"charId": "chr_1", "name": {"id": 1}}},
+            {},
+            {},
+            {},
+            {},
+            {"1": {"text": "对象格式中文角色"}},
+        )
+        self.assertEqual(name_map.character_names["chr_1"], "对象格式中文角色")
 
     def test_account_detail_prefers_akedata_names_over_api_names(self):
         detail = {

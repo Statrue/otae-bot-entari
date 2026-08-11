@@ -10,6 +10,7 @@ from .account_detail_models import (
     AccountStatView,
     AccountWeaponView,
 )
+from .account_i18n import semantic_key, semantic_label, server_label
 from .account_detail_names import AccountDetailNameMap
 from .gacha import format_timestamp
 
@@ -70,7 +71,7 @@ def build_account_detail_view(
     return AccountDetailView(
         nickname=_text(base.get("name")) or nickname or "未知管理员",
         uid=uid,
-        server_name=server_name or _text(base.get("serverName")),
+        server_name=server_label(server_name or _text(base.get("serverName"))),
         level=_int_or_none(base.get("level")),
         world_level=_int_or_none(base.get("worldLevel")),
         main_mission=_text(_mapping(base.get("mainMission")).get("description")),
@@ -145,10 +146,10 @@ def _build_operator(
         level=_int_or_none(character.get("level")),
         evolve_phase=_int_or_none(character.get("evolvePhase")),
         potential_level=_int_or_none(character.get("potentialLevel")),
-        profession=_semantic_value(char_data.get("profession")),
-        element=_semantic_value(char_data.get("property")),
+        profession=semantic_label(char_data.get("profession")),
+        element=semantic_label(char_data.get("property")),
         element_color=ELEMENT_COLORS.get(element_key, "#888888"),
-        weapon_type=_semantic_value(char_data.get("weaponType")),
+        weapon_type=semantic_label(char_data.get("weaponType")),
         portrait_url=_text(char_data.get("avatarSqUrl")),
         skills=_build_skills(character, char_data, name_map),
         weapon=_build_weapon(character.get("weapon"), name_map),
@@ -184,8 +185,8 @@ def _build_skills(
                 icon_url=_text(skill.get("iconUrl")),
                 level=_int_or_none(learned.get("level")),
                 max_level=_int_or_none(learned.get("maxLevel")),
-                type_label=_semantic_value(skill.get("type")),
-                damage_type=_semantic_value(skill.get("property")),
+                type_label=semantic_label(skill.get("type")),
+                damage_type=semantic_label(skill.get("property")),
                 damage_color=SKILL_PROPERTY_COLORS.get(property_key, "#969a99"),
                 is_ultimate=type_key == ULTIMATE_SKILL_TYPE,
             )
@@ -211,7 +212,7 @@ def _build_weapon(value: Any, name_map: AccountDetailNameMap) -> AccountWeaponVi
         level=_int_or_none(weapon.get("level")),
         potential_level=potential_level,
         breakthrough_level=_int_or_none(weapon.get("breakthroughLevel")),
-        type_label=_semantic_value(weapon_data.get("type")),
+        type_label=semantic_label(weapon_data.get("type")),
         gem_name=_mapped_name(
             name_map.item_names,
             (gem_data.get("id"), weapon.get("gemId")),
@@ -245,7 +246,7 @@ def _build_equips(
                 ),
                 icon_url=_text(equip_data.get("iconUrl")),
                 rarity=_equip_rarity(equip_data.get("rarity")),
-                type_label=_semantic_value(equip_data.get("type")),
+                type_label=semantic_label(equip_data.get("type")),
                 level_label=_semantic_value(equip_data.get("level")),
                 suit_name=_mapped_name(
                     name_map.suit_names,
@@ -302,9 +303,7 @@ def _semantic_value(value: Any, default: str = "") -> str:
 
 
 def _semantic_key(value: Any) -> str:
-    if isinstance(value, Mapping):
-        return _text(value.get("key"))
-    return ""
+    return semantic_key(value)
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:

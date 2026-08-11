@@ -13,13 +13,15 @@ _TABLE_MAX_BYTES = 24 * 1024 * 1024
 
 @dataclass(frozen=True, slots=True)
 class AccountDetailNameMap:
-    """Chinese names resolved from the current AKEData TableCfg snapshot."""
+    """Chinese account-facing labels resolved from the current AKEData snapshot."""
 
     character_names: Mapping[str, str] = field(default_factory=dict)
     weapon_names: Mapping[str, str] = field(default_factory=dict)
     skill_names: Mapping[str, str] = field(default_factory=dict)
     item_names: Mapping[str, str] = field(default_factory=dict)
     suit_names: Mapping[str, str] = field(default_factory=dict)
+    spaceship_skill_names: Mapping[str, str] = field(default_factory=dict)
+    spaceship_skill_descriptions: Mapping[str, str] = field(default_factory=dict)
     version: str = ""
 
 
@@ -58,12 +60,21 @@ async def fetch_account_detail_name_map() -> AccountDetailNameMap:
         if not table_cfg:
             raise RuntimeError(f"AKEData version has no TableCfg path: {latest}")
 
-        character_table, growth_table, weapon_table, item_table, suit_table, i18n = await asyncio.gather(
+        (
+            character_table,
+            growth_table,
+            weapon_table,
+            item_table,
+            suit_table,
+            spaceship_skill_table,
+            i18n,
+        ) = await asyncio.gather(
             _get(f"/{table_cfg}/CharacterTable.json", max_bytes=_TABLE_MAX_BYTES),
             _get(f"/{table_cfg}/CharGrowthTable.json", max_bytes=_TABLE_MAX_BYTES),
             _get(f"/{table_cfg}/WeaponBasicTable.json", max_bytes=_TABLE_MAX_BYTES),
             _get(f"/{table_cfg}/ItemTable.json", max_bytes=_TABLE_MAX_BYTES),
             _get(f"/{table_cfg}/EquipSuitTable.json", max_bytes=_TABLE_MAX_BYTES),
+            _get(f"/{table_cfg}/SpaceshipSkillTable.json", max_bytes=_TABLE_MAX_BYTES),
             _get(f"/{table_cfg}/I18nTextTable_CN.json", max_bytes=64 * 1024 * 1024),
         )
         _name_map_cache = build_account_detail_name_map(
@@ -73,6 +84,7 @@ async def fetch_account_detail_name_map() -> AccountDetailNameMap:
             item_table,
             suit_table,
             i18n,
+            spaceship_skill_table=spaceship_skill_table,
             version=latest,
         )
         return _name_map_cache
@@ -86,6 +98,7 @@ def build_account_detail_name_map(
     suit_table: Any,
     i18n: Any,
     *,
+    spaceship_skill_table: Any = None,
     version: str = "",
 ) -> AccountDetailNameMap:
     """Build an account-detail name map from AKEData table payloads."""
@@ -95,6 +108,8 @@ def build_account_detail_name_map(
     skill_names: dict[str, str] = {}
     item_names: dict[str, str] = {}
     suit_names: dict[str, str] = {}
+    spaceship_skill_names: dict[str, str] = {}
+    spaceship_skill_descriptions: dict[str, str] = {}
 
     item_rows = _rows(item_table)
     for key, row in item_rows:
@@ -140,12 +155,23 @@ def build_account_detail_name_map(
                 _put(suit_names, suit_id, name)
                 break
 
+    for key, row in _rows(spaceship_skill_table):
+        skill_id = _field_text(row.get("id")) or key
+        _put(spaceship_skill_names, skill_id, _i18n_text(translations, row.get("name")))
+        _put(
+            spaceship_skill_descriptions,
+            skill_id,
+            _i18n_text(translations, row.get("desc")),
+        )
+
     return AccountDetailNameMap(
         character_names=character_names,
         weapon_names=weapon_names,
         skill_names=skill_names,
         item_names=item_names,
         suit_names=suit_names,
+        spaceship_skill_names=spaceship_skill_names,
+        spaceship_skill_descriptions=spaceship_skill_descriptions,
         version=version,
     )
 
@@ -165,7 +191,10 @@ def _i18n_text(i18n: Mapping[str, Any], value: Any) -> str:
         return _field_text(value)
     text_id = value.get("id")
     if text_id is not None:
-        translated = _field_text(i18n.get(str(text_id)))
+        translated = i18n.get(str(text_id))
+        if isinstance(translated, Mapping):
+            translated = translated.get("text") or translated.get("value")
+        translated = _field_text(translated)
         if translated:
             return translated
     return _field_text(value.get("text"))

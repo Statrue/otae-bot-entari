@@ -61,6 +61,7 @@ from .gacha import (
     calculate_six_star_expectation,
     format_timestamp,
 )
+from .account_i18n import server_label
 from .skill_metrics import fz_metric_replaces_generic, is_generic_fz_metric
 
 
@@ -240,6 +241,7 @@ async def draw_attendance_card(view: AttendanceCardView) -> bytes:
     reward_icons = await _image_data_urls(reward_urls) if reward_urls else {}
     rows = []
     for role in view.roles:
+        server_name = server_label(role.server_name) or "默认服务器"
         reward_parts = []
         for item in role.rewards:
             icon_url = reward_icons.get(item.icon_url, "")
@@ -263,7 +265,7 @@ async def draw_attendance_card(view: AttendanceCardView) -> bytes:
         rows.append(
             f"""
             <section class="attendance-row status-{esc(role.status)}">
-              <div class="role-main"><strong>{esc(role.nickname)}</strong><span>{esc(role.server_name or '默认服务器')} · {esc(role.uid)}</span></div>
+              <div class="role-main"><strong>{esc(role.nickname)}</strong><span>{esc(server_name)} · {esc(role.uid)}</span></div>
               <div class="status"><div class="status-copy"><b>{esc(role.message)}</b><span>{rewards}</span></div>{monthly_count}</div>
             </section>
             """
@@ -338,6 +340,7 @@ async def draw_gacha_analysis_card(
     page_count: int = 1,
     show_summary: bool = True,
 ) -> bytes:
+    server_name = server_label(view.role.server_name) or "默认服务器"
     character_pools = (
         _recent_gacha_pools(view, "角色") if character_pools is None else character_pools
     )
@@ -400,7 +403,7 @@ async def draw_gacha_analysis_card(
     return await _draw_neutral_card(
         "gacha-analysis-card",
         f"""
-        <header><div><small>ENDFIELD / GACHA ARCHIVE</small><h1>{esc(view.role.nickname)} · 抽卡分析</h1><p>{esc(view.role.server_name or '默认服务器')} · {esc(uid)}</p></div><div class="sync-state"><b>{esc(page_state)}</b><span>同步 {esc(format_timestamp(view.last_sync_at))}</span></div></header>
+        <header><div><small>ENDFIELD / GACHA ARCHIVE</small><h1>{esc(view.role.nickname)} · 抽卡分析</h1><p>{esc(server_name)} · {esc(uid)}</p></div><div class="sync-state"><b>{esc(page_state)}</b><span>同步 {esc(format_timestamp(view.last_sync_at))}</span></div></header>
         <main>
           {summary_html}
           <section class="two-column">{character_column}{weapon_column}</section>
@@ -780,6 +783,7 @@ def _draw_gacha_icon(item: SixStarEvent) -> str:
 
 
 async def draw_gacha_history_card(view: GachaHistoryView) -> bytes:
+    server_name = server_label(view.server_name) or "默认服务器"
     rows = []
     for item in view.items:
         icon_url = _local_image_data_url(Path(item.icon_path)) if item.icon_path else ""
@@ -800,7 +804,7 @@ async def draw_gacha_history_card(view: GachaHistoryView) -> bytes:
     return await _draw_neutral_card(
         "gacha-history-card",
         f"""
-        <header><div><small>ENDFIELD / GACHA LOG</small><h1>{esc(view.nickname)} · 抽卡记录</h1><p>{esc(view.server_name or '默认服务器')} · {esc(view.uid)}{filter_text}</p></div><div class="page"><b>{view.page} / {view.total_pages}</b><span>共 {view.total} 条</span></div></header>
+        <header><div><small>ENDFIELD / GACHA LOG</small><h1>{esc(view.nickname)} · 抽卡记录</h1><p>{esc(server_name)} · {esc(view.uid)}{filter_text}</p></div><div class="page"><b>{view.page} / {view.total_pages}</b><span>共 {view.total} 条</span></div></header>
         <main><div class="history-head"><span>图</span><span>时间</span><span>卡池</span><span>名称</span><span>星级</span><span>类型</span></div><div class="history-list">{rows_html}</div><footer class="gacha-source"><span>星级与图片来源 FZ Wiki</span><span>图片已存入本地缓存</span></footer></main>
         """,
         extra_css="""
@@ -987,6 +991,7 @@ def _medal_upgrade_html(medal: MedalItemView, icon_map: dict[str, str]) -> str:
 
 async def draw_medal_missing_card(view: MedalMissingView) -> tuple[bytes, ...]:
     """F2：个人缺章（未获得/未升满/未镀层）；截断后条目数有限，单页足够。"""
+    server_name = server_label(view.server_name) or "默认服务器"
     all_medals = [*view.not_obtained, *view.not_maxed, *view.not_plated]
     _icon_urls = [m.icon_url for m in all_medals if m.icon_url]
     _icon_urls += [m.next_icon_url for m in view.not_maxed if m.next_icon_url]
@@ -1010,7 +1015,7 @@ async def draw_medal_missing_card(view: MedalMissingView) -> tuple[bytes, ...]:
         [("版本总数", view.total_count), ("未获得", view.not_obtained_count), ("未升满", view.not_maxed_count), ("未镀层", view.not_plated_count)],
     )
     body = f"""
-    <header><div><small>ENDFIELD / MEDAL MISSING</small><h1>蚀刻章缺章</h1><p>{esc(view.nickname)} · {esc(view.server_name)} · {esc(view.uid)}</p></div></header>
+    <header><div><small>ENDFIELD / MEDAL MISSING</small><h1>蚀刻章缺章</h1><p>{esc(view.nickname)} · {esc(server_name)} · {esc(view.uid)}</p></div></header>
     <main>
       {stats}
       {notice}

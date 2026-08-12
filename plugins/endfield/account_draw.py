@@ -15,6 +15,7 @@ from utils.image_utils import BrowserResource, screenshot_web_element
 from utils.temp_files import schedule_temp_file_cleanup
 
 from .account_models import AccountUiPayload, JsonObject
+from .account_i18n import localized_text, semantic_label
 
 
 CANVAS_WIDTH = 1920
@@ -637,7 +638,7 @@ def _profile_character_card(character: JsonObject, assets: Mapping[str, str]) ->
     potential_level = _potential_level(character)
     potential_asset = "profile-potential-0" if potential_level == 0 else f"potential-{potential_level}"
     potential_icon = _ui_icon(potential_asset, assets, "profile-potential-icon")
-    property_name = (data.get("property") or {}).get("value") or "--"
+    property_name = semantic_label(data.get("property"), default=localized_text(data.get("property"), default="--"))
     return f"""<article class="operator-card">
 <img src="{_attr(portrait)}"><div class="operator-badges">{profession_icon}</div><span class="operator-potential" title="干员潜能 {_text(potential_level)}">{potential_icon}</span><div class="property-chip property-{_attr(property_name_key)}">{property_icon}<span>{_text(property_name)}</span></div><div class="operator-meta"><span>LV.</span><b>{_text(character.get('level'))}</b></div>
 <strong>{_text(data.get('name'))}</strong></article>"""
@@ -719,7 +720,7 @@ def _weapon_skills(character: JsonObject) -> tuple[tuple[str, Any], ...]:
     for skill in weapon_data.get("skills") or []:
         if not isinstance(skill, Mapping):
             continue
-        output.append((str(skill.get("value") or "武器技能"), skill_level))
+        output.append((localized_text(skill.get("value"), default="武器技能"), skill_level))
         if len(output) == 3:
             break
     return tuple(output)
@@ -887,11 +888,11 @@ def _format_duration(value: Any) -> str:
 
 
 def _plain_rich_text(value: Any) -> str:
-    return re.sub(r"<[^>]+>", "", str(value or "")).replace("\\n", "\n")
+    return re.sub(r"<[^>]+>", "", localized_text(value)).replace("\\n", "\n")
 
 
 def _text(value: Any) -> str:
-    return html.escape(str(value if value is not None else "--"))
+    return html.escape(localized_text(value, default="--"))
 
 
 def _attr(value: Any) -> str:

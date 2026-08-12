@@ -9,6 +9,7 @@ from typing import Any
 
 from loguru import logger
 
+from .account_i18n import localized_text
 from .client import WarfarinClient
 from .stage_models import (
     BossRushStageDetails,
@@ -1617,9 +1618,7 @@ def _dig(source: Any, *keys: str) -> Any:
 
 def _localized(value: Any) -> str:
     """FZ ships `{zh, en}` pairs in some slots and a bare string in others."""
-    if isinstance(value, dict):
-        return _text(value.get("zh")) or _text(value.get("en"))
-    return _text(value)
+    return localized_text(value)
 
 
 _MARKUP_TAG = re.compile(r"<[^<>]{0,200}?>")

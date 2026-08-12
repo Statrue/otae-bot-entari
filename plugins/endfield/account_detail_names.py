@@ -5,6 +5,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
+from .account_i18n import localized_text
 from .akedata_client import _get, fetch_akedata_manifest
 
 
@@ -60,6 +61,16 @@ async def fetch_account_detail_name_map() -> AccountDetailNameMap:
         if not table_cfg:
             raise RuntimeError(f"AKEData version has no TableCfg path: {latest}")
 
+        values = await asyncio.gather(
+            _get(f"/{table_cfg}/CharacterTable.json", max_bytes=_TABLE_MAX_BYTES),
+            _get(f"/{table_cfg}/CharGrowthTable.json", max_bytes=_TABLE_MAX_BYTES),
+            _get(f"/{table_cfg}/WeaponBasicTable.json", max_bytes=_TABLE_MAX_BYTES),
+            _get(f"/{table_cfg}/ItemTable.json", max_bytes=_TABLE_MAX_BYTES),
+            _get(f"/{table_cfg}/EquipSuitTable.json", max_bytes=_TABLE_MAX_BYTES),
+            _get(f"/{table_cfg}/SpaceshipSkillTable.json", max_bytes=_TABLE_MAX_BYTES),
+            _get(f"/{table_cfg}/I18nTextTable_CN.json", max_bytes=64 * 1024 * 1024),
+            return_exceptions=True,
+        )
         (
             character_table,
             growth_table,
@@ -68,15 +79,14 @@ async def fetch_account_detail_name_map() -> AccountDetailNameMap:
             suit_table,
             spaceship_skill_table,
             i18n,
-        ) = await asyncio.gather(
-            _get(f"/{table_cfg}/CharacterTable.json", max_bytes=_TABLE_MAX_BYTES),
-            _get(f"/{table_cfg}/CharGrowthTable.json", max_bytes=_TABLE_MAX_BYTES),
-            _get(f"/{table_cfg}/WeaponBasicTable.json", max_bytes=_TABLE_MAX_BYTES),
-            _get(f"/{table_cfg}/ItemTable.json", max_bytes=_TABLE_MAX_BYTES),
-            _get(f"/{table_cfg}/EquipSuitTable.json", max_bytes=_TABLE_MAX_BYTES),
-            _get(f"/{table_cfg}/SpaceshipSkillTable.json", max_bytes=_TABLE_MAX_BYTES),
-            _get(f"/{table_cfg}/I18nTextTable_CN.json", max_bytes=64 * 1024 * 1024),
-        )
+        ) = values
+        for value in (character_table, growth_table, weapon_table, item_table, suit_table, i18n):
+            if isinstance(value, Exception):
+                raise value
+        if isinstance(spaceship_skill_table, Exception):
+            # Older revisions may not publish this optional table. The other
+            # account pages can still use the character/item/i18n tables.
+            spaceship_skill_table = {}
         _name_map_cache = build_account_detail_name_map(
             character_table,
             growth_table,
@@ -187,17 +197,7 @@ def _rows(value: Any) -> tuple[tuple[str, Mapping[str, Any]], ...]:
 
 
 def _i18n_text(i18n: Mapping[str, Any], value: Any) -> str:
-    if not isinstance(value, Mapping):
-        return _field_text(value)
-    text_id = value.get("id")
-    if text_id is not None:
-        translated = i18n.get(str(text_id))
-        if isinstance(translated, Mapping):
-            translated = translated.get("text") or translated.get("value")
-        translated = _field_text(translated)
-        if translated:
-            return translated
-    return _field_text(value.get("text"))
+    return localized_text(value, translations=i18n)
 
 
 def _put(target: dict[str, str], key: str, value: str) -> None:

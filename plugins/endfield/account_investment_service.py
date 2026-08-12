@@ -12,6 +12,8 @@ from .account_investment_models import (
     InvestmentContributionView,
     InvestmentResourceView,
 )
+from .account_detail_names import AccountDetailNameMap
+from .account_i18n import localized_text, server_label
 from .akedata_client import _get, fetch_akedata_manifest
 from .gacha import format_timestamp
 
@@ -248,6 +250,7 @@ def build_account_investment_view(
     nickname: str = "",
     server_name: str = "",
     catalog: InvestmentCatalog,
+    name_map: AccountDetailNameMap | None = None,
 ) -> AccountInvestmentView:
     """Calculate current, visible account investment from a card/detail payload."""
     detail = detail if isinstance(detail, Mapping) else {}
@@ -269,7 +272,7 @@ def build_account_investment_view(
     for raw in _sequence(detail.get("chars")):
         if not isinstance(raw, Mapping):
             continue
-        result = _operator_investment(raw, catalog)
+        result = _operator_investment(raw, catalog, name_map or AccountDetailNameMap())
         operators.append(result)
         covered += result.covered
         expected += result.expected
@@ -318,7 +321,7 @@ def build_account_investment_view(
     return AccountInvestmentView(
         nickname=_text(base.get("name")) or nickname or "未知管理员",
         uid=_text(uid),
-        server_name=_text(server_name) or _text(base.get("serverName")),
+        server_name=server_label(server_name or _text(base.get("serverName"))),
         saved_at=format_timestamp(_int(base.get("saveTime")) or 0),
         source_revision=catalog.version,
         operator_count=len(operators),
@@ -825,7 +828,9 @@ def _build_safe_recipes(value: Any) -> dict[str, tuple[_Recipe, ...]]:
     return {key: tuple(value) for key, value in result.items()}
 
 
-def _operator_investment(raw: Mapping[str, Any], catalog: InvestmentCatalog) -> _OperatorResult:
+def _operator_investment(
+    raw: Mapping[str, Any], catalog: InvestmentCatalog, name_map: AccountDetailNameMap
+) -> _OperatorResult:
     char_data = _mapping(raw.get("charData"))
     char_id = next(
         (
@@ -842,12 +847,14 @@ def _operator_investment(raw: Mapping[str, Any], catalog: InvestmentCatalog) -> 
         "",
     )
     spec = catalog.characters.get(char_id)
-    name = (
+    name = _mapped_name(
+        name_map.character_names,
+        (char_data.get("id"), char_data.get("charId"), raw.get("charId"), raw.get("id")),
         (spec.name if spec is not None else "")
         or _text(char_data.get("name"))
         or _text(raw.get("name"))
         or char_id
-        or "未知干员"
+        or "未知干员",
     )
     portrait = (
         _text(char_data.get("avatarSqUrl"))
@@ -1203,9 +1210,17 @@ def _sequence(value: Any) -> tuple[Any, ...]:
 
 
 def _text(value: Any) -> str:
-    if value is None or isinstance(value, (Mapping, list, tuple)):
-        return ""
-    return str(value).strip()
+    return localized_text(value)
+
+
+def _mapped_name(names: Mapping[str, str], identifiers: tuple[Any, ...], fallback: Any) -> str:
+    for identifier in identifiers:
+        key = _text(identifier)
+        if key:
+            mapped = _text(names.get(key))
+            if mapped:
+                return mapped
+    return _text(fallback)
 
 
 def _id_alias(value: str) -> str:
@@ -1256,13 +1271,4 @@ def _missing_node_label(name: str, node_id: str) -> str:
 
 
 def _localized(translations: Mapping[str, Any], value: Any) -> str:
-    if isinstance(value, Mapping):
-        text_id = value.get("id")
-        if text_id is not None:
-            translated = translations.get(str(text_id))
-            if isinstance(translated, Mapping):
-                translated = translated.get("text") or translated.get("value")
-            if _text(translated):
-                return _text(translated)
-        return _text(value.get("text"))
-    return _text(value)
+    return localized_text(value, translations=translations)

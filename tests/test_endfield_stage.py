@@ -30,6 +30,7 @@ from plugins.endfield.stage_models import (
 from plugins.endfield.akedata_stage_source import (
     AkeDataStageSource,
     AkeDataVersion,
+    _translated,
     parse_akedata_catalog,
     parse_akedata_stage,
 )
@@ -40,7 +41,7 @@ from plugins.endfield.stage_service import (
     _match_item,
     select_variant,
 )
-from plugins.endfield.stage_source import FZStageSource, parse_enemy_resistances, parse_fz_stage
+from plugins.endfield.stage_source import FZStageSource, _localized, parse_enemy_resistances, parse_fz_stage
 
 
 def _resistance_models() -> tuple[StageEnemyResistance, ...]:
@@ -670,6 +671,16 @@ class EndfieldStageSourceTests(unittest.TestCase):
 
 
 class EndfieldAkeDataStageSourceTests(unittest.TestCase):
+    def test_localizes_object_shaped_stage_text(self):
+        self.assertEqual(
+            _translated(
+                {"id": "stage-name"},
+                {"stage-name": {"zh": "中文关卡", "en": "English Stage"}},
+            ),
+            "中文关卡",
+        )
+        self.assertEqual(_localized({"zh-CN": "中文标题", "en": "English Title"}), "中文标题")
+
     def test_catalog_discovers_monument_stages_and_keeps_series(self):
         version, tables = _akedata_fixture()
         catalog = parse_akedata_catalog(version, *tables[:3])

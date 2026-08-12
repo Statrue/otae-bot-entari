@@ -134,10 +134,11 @@ def _header(view: AccountInvestmentView, title: str) -> str:
 
 
 def _footer(view: AccountInvestmentView) -> str:
+    server_name = view.server_name or "未知服务器"
     return (
         '<footer class="investment-footer">'
         f'<span>档案 {esc(view.saved_at or "--")} · AKEData {esc(view.source_revision)}</span>'
-        '<span>未装备武器不计 · 非理智材料保留原始数量 · 国服</span>'
+        f'<span>未装备武器不计 · 非理智材料保留原始数量 · {esc(server_name)}</span>'
         '</footer>'
     )
 

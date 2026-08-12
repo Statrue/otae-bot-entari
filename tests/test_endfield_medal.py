@@ -351,6 +351,15 @@ class AkedataMedalSnapshotTest(unittest.TestCase):
         }
         return achievement, type_table, i18n
 
+    def test_medal_i18n_accepts_object_shaped_translation_rows(self):
+        self.assertEqual(
+            endfield_service_module._i18n_text(
+                {"1001": {"zh": "中文奖章", "en": "English Medal"}},
+                {"id": "1001"},
+            ),
+            "中文奖章",
+        )
+
     def test_build_akedata_snapshot_fields(self):
         from plugins.endfield.akedata_client import AKEDATA_ICON_BASE
         from plugins.endfield.service import build_akedata_medal_snapshot

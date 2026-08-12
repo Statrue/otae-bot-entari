@@ -14,6 +14,7 @@ from urllib.parse import urlencode
 import httpx
 
 from .account_store import GachaRecord, RoleCandidate
+from .account_i18n import localized_text
 
 
 for _logger_name in ("httpx", "httpcore"):
@@ -442,7 +443,10 @@ class EndfieldOfficialClient:
         result: dict[str, str] = {}
         for item in _response_items(payload):
             pool_type = str(item.get("poolType") or item.get("pool_type") or item.get("type") or "")
-            name = str(item.get("poolName") or item.get("pool_name") or item.get("name") or pool_type)
+            name = localized_text(
+                item.get("poolName") or item.get("pool_name") or item.get("name"),
+                default=pool_type,
+            )
             if pool_type:
                 result[pool_type] = name
         return result
@@ -458,7 +462,15 @@ class EndfieldOfficialClient:
         for item in _response_items(payload):
             pool_id = str(item.get("poolId") or item.get("pool_id") or item.get("id") or "")
             if pool_id:
-                result.append((pool_id, str(item.get("poolName") or item.get("pool_name") or item.get("name") or pool_id)))
+                result.append(
+                    (
+                        pool_id,
+                        localized_text(
+                            item.get("poolName") or item.get("pool_name") or item.get("name"),
+                            default=pool_id,
+                        ),
+                    )
+                )
         return result
 
     async def character_records(
@@ -682,8 +694,17 @@ def _extract_endfield_roles(payload: dict[str, Any]) -> list[RoleCandidate]:
                     RoleCandidate(
                         binding_uid=binding_uid,
                         role_id=str(role.get("roleId")), server_id=str(role.get("serverId")),
-                        nickname=str(role.get("nickname") or role.get("nickName") or binding.get("nickName") or "未命名角色"),
-                        server_name=str(role.get("serverName") or role.get("serverType") or binding.get("channelName") or ""),
+                        nickname=localized_text(
+                            role.get("nickname")
+                            or role.get("nickName")
+                            or binding.get("nickName"),
+                            default="未命名角色",
+                        ),
+                        server_name=localized_text(
+                            role.get("serverName")
+                            or role.get("serverType")
+                            or binding.get("channelName")
+                        ),
                     )
                 )
     return _dedupe_roles(candidates)
@@ -798,8 +819,18 @@ def _extract_gacha_binding_roles(payload: dict[str, Any]) -> list[RoleCandidate]
                     binding_uid=binding_uid,
                     role_id=role_id,
                     server_id=server_id,
-                    nickname=str(role.get("nickName") or role.get("nickname") or binding.get("nickName") or binding.get("nickname") or "未命名角色"),
-                    server_name=str(role.get("serverName") or role.get("server_name") or binding.get("serverName") or ""),
+                    nickname=localized_text(
+                        role.get("nickName")
+                        or role.get("nickname")
+                        or binding.get("nickName")
+                        or binding.get("nickname"),
+                        default="未命名角色",
+                    ),
+                    server_name=localized_text(
+                        role.get("serverName")
+                        or role.get("server_name")
+                        or binding.get("serverName")
+                    ),
                 )
             )
     return _dedupe_roles(result)
@@ -828,9 +859,12 @@ def _character_record(role: Any, item: dict[str, Any], pool_type: str, pool_name
     return GachaRecord(
         role_id=role.role_id, server_id=role.server_id,
         pool_id=str(item.get("poolId") or item.get("pool_id") or pool_type),
-        pool_name=str(item.get("poolName") or item.get("pool_name") or pool_name or pool_type),
+        pool_name=localized_text(
+            item.get("poolName") or item.get("pool_name") or pool_name,
+            default=pool_type,
+        ),
         pool_type=pool_type, seq_id=str(item.get("seqId")), gacha_ts=_normalize_timestamp(item.get("gachaTs")),
-        item_id=str(item.get("charId") or ""), item_name=str(item.get("charName") or "未知角色"),
+        item_id=str(item.get("charId") or ""), item_name=localized_text(item.get("charName"), default="未知角色"),
         rarity=_normalize_rarity(item.get("rarity")), item_type="角色",
         is_new=_as_bool(item.get("isNew")), is_free=_as_bool(item.get("isFree")),
     )
@@ -840,11 +874,14 @@ def _weapon_record(role: Any, item: dict[str, Any], pool_id: str, pool_name: str
     return GachaRecord(
         role_id=role.role_id, server_id=role.server_id,
         pool_id=str(item.get("poolId") or item.get("pool_id") or pool_id),
-        pool_name=str(item.get("poolName") or item.get("pool_name") or pool_name or pool_id),
+        pool_name=localized_text(
+            item.get("poolName") or item.get("pool_name") or pool_name,
+            default=pool_id,
+        ),
         pool_type="weapon", seq_id=str(item.get("seqId")), gacha_ts=_normalize_timestamp(item.get("gachaTs")),
-        item_id=str(item.get("weaponId") or ""), item_name=str(item.get("weaponName") or "未知武器"),
+        item_id=str(item.get("weaponId") or ""), item_name=localized_text(item.get("weaponName"), default="未知武器"),
         rarity=_normalize_rarity(item.get("rarity")), item_type="武器",
-        weapon_type=str(item.get("weaponType") or ""), is_new=_as_bool(item.get("isNew")),
+        weapon_type=localized_text(item.get("weaponType")), is_new=_as_bool(item.get("isNew")),
         is_free=_as_bool(item.get("isFree")),
     )
 

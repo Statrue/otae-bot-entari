@@ -34,6 +34,7 @@ from .account_client import (
 )
 from .account_crypto import CredentialCipher, CredentialKeyError
 from .account_store import EndfieldRole, EndfieldStore, RoleCandidate
+from .account_i18n import server_label
 from .aliases import add_alias, alias_targets
 from .commands import (
     EndfieldCandidate,
@@ -447,7 +448,7 @@ async def _handle_medal_missing(
         return await matcher.finish("奖章进度查询失败。")
     view = service.build_medal_missing_view(
         raw_progress, snapshot,
-        nickname=role.nickname, uid=role.masked_uid, server_name=role.server_name,
+        nickname=role.nickname, uid=role.masked_uid, server_name=server_label(role.server_name or role.server_id),
     )
     try:
         pngs = await draw_medal_missing_card(view)
@@ -589,7 +590,7 @@ async def _handle_binding(matcher, qq_user_id: str, cipher: CredentialCipher) ->
     summary += f"；当前共绑定 {len(bound_roles)} 个账号。"
     return await matcher.finish(
         summary + "\n" + "\n".join(
-            f"- {role.nickname} · {role.server_name or role.server_id} · UID {role.role_id}" for role in selected
+            f"- {role.nickname} · {server_label(role.server_name or role.server_id)} · UID {role.role_id}" for role in selected
         )
     )
 
@@ -691,7 +692,7 @@ async def _select_binding_roles(roles: list[RoleCandidate]) -> list[RoleCandidat
         return roles
     lines = ["检测到多个终末地角色，请回复编号、逗号分隔的多个编号，或“全部”："]
     lines.extend(
-        f"{index}. {role.nickname} · {role.server_name or role.server_id} · UID {role.role_id}"
+        f"{index}. {role.nickname} · {server_label(role.server_name or role.server_id)} · UID {role.role_id}"
         for index, role in enumerate(roles, 1)
     )
     answer = await _prompt_text("\n".join(lines), timeout=120)
@@ -818,16 +819,26 @@ async def _render_account_investment(
     provider, _raw_token = decode_account_credential(token)
     if provider == ACCOUNT_PROVIDER_SKPORT or is_asia_role(role):
         return await matcher.finish("养成统计目前仅支持国服账号，亚服暂不支持。")
+
+    async def load_name_map():
+        try:
+            return await fetch_account_detail_name_map()
+        except Exception as exc:
+            logger.warning(f"[endfield] investment AKE name map unavailable: {exc}")
+            return None
+
     detail, catalog = await asyncio.gather(
         official_client.card_detail(token, role),
         fetch_account_investment_catalog(),
     )
+    name_map = await load_name_map()
     view = build_account_investment_view(
         detail,
         uid=role.masked_uid if group else role.role_id,
         nickname=role.nickname,
         server_name=role.server_name or role.server_id,
         catalog=catalog,
+        name_map=name_map,
     )
     return await _finish_pngs(matcher, await draw_account_investment_cards(view))
 
@@ -983,7 +994,7 @@ async def _handle_gacha_history(matcher, qq_user_id: str, command: ParsedEndfiel
     records = apply_gacha_metadata(records, metadata)
     view = GachaHistoryView(
         nickname=role.nickname, uid=role.masked_uid,
-        server_name=role.server_name, page=command.page, total_pages=total_pages, total=total,
+        server_name=server_label(role.server_name or role.server_id), page=command.page, total_pages=total_pages, total=total,
         pool_filter=command.pool_filter,
         items=[
             GachaHistoryItemView(
@@ -1052,7 +1063,7 @@ def _attendance_view(role: EndfieldRole, result: AttendanceResult) -> Attendance
     return AttendanceRoleView(
         nickname=role.nickname,
         uid=role.masked_uid,
-        server_name=role.server_name,
+        server_name=server_label(role.server_name or role.server_id),
         status=result.status,
         message=result.message,
         rewards=[AttendanceRewardView(item.name, item.count, item.icon_url) for item in result.rewards],
@@ -1067,7 +1078,7 @@ def _format_accounts(roles: list[EndfieldRole], *, reveal_uid: bool, detail_hint
     for index, role in enumerate(roles, 1):
         marker = " [主账号]" if role.is_primary else ""
         uid = role.role_id if reveal_uid else role.masked_uid
-        lines.append(f"{index}. {role.nickname}{marker} · {role.server_name or role.server_id} · UID {uid}")
+        lines.append(f"{index}. {role.nickname}{marker} · {server_label(role.server_name or role.server_id)} · UID {uid}")
     if detail_hint:
         lines.append("回复编号查看该账号详情，或回复“取消”退出。")
     lines.append("可使用 /zmd 添加账号 继续绑定，或用 /zmd 主账号 <编号>、/zmd 解绑 <编号> 管理。")

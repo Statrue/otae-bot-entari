@@ -63,6 +63,7 @@ from .models import (
     WeaponCatalogView,
     WeaponView,
 )
+from .account_i18n import localized_text
 from .sources import source_order
 from .skill_metrics import fz_metric_replaces_generic
 
@@ -633,7 +634,7 @@ class EndfieldService:
             data = detail.get("data") or {}
             character = data.get("characterTable") or {}
             recommendations = data.get("charWpnRecommendTable") or {}
-            name = str((detail.get("meta") or {}).get("name") or item.get("name") or "").strip()
+            name = _first_text(detail.get("meta") or {}, "name") or _first_text(item, "name")
             if not name:
                 continue
             if str(character.get("defaultWeaponId") or "").strip() == weapon_id:
@@ -817,13 +818,13 @@ def build_operator_view(raw: dict[str, Any]) -> OperatorView:
             tags.append(tag_name)
 
     view = OperatorView(
-        name=str(meta.get("name") or character.get("name") or ""),
-        slug=str(meta.get("slug") or ""),
+        name=_first_text(meta, "name") or _first_text(character, "name"),
+        slug=_first_text(meta, "slug"),
         operator_id=operator_id,
-        english_name=str(character.get("engName") or ""),
+        english_name=_first_text(character, "engName"),
         rarity=int(character.get("rarity") or 0),
-        profession=str(profession_ref.get("name") or "未知职业"),
-        damage_type=str(type_ref.get("name") or char_type_id or "未知属性"),
+        profession=_first_text(profession_ref, "name") or "未知职业",
+        damage_type=_first_text(type_ref, "name") or char_type_id or "未知属性",
         weapon_type=_weapon_name(character.get("weaponType"), item_table.get("desc")),
         species=_extract_species(character),
         tags=tags[:4],
@@ -853,7 +854,7 @@ def build_fz_operator_view(raw: dict[str, Any], richtext: dict[str, Any] | None 
     if not hero or not skills:
         raise ValueError("FZ operator article does not match the supported card schema")
 
-    title = str(article.get("title") or "")
+    title = _first_text(article, "title")
     name = _first_text(hero, "name", "nameCn", "cnName", "title") or title.split("/", 1)[-1]
     if not name:
         raise ValueError("FZ operator article is missing name")
@@ -890,7 +891,7 @@ def build_fz_equipment_view(raw: dict[str, Any], richtext: dict[str, Any] | None
     if not hero:
         raise ValueError("FZ equipment article does not match the supported card schema")
 
-    title = str(article.get("title") or "")
+    title = _first_text(article, "title")
     name = _first_text(hero, "name", "title") or title.split("/", 1)[-1]
     if not name:
         raise ValueError("FZ equipment article is missing name")
@@ -2632,9 +2633,7 @@ def build_fz_medal_snapshot_view(
 
 def _i18n_text(i18n: dict[str, Any], obj: Any) -> str:
     """``{id, text}`` → 按 text-id 在 I18nTextTable 解析出的中文文本。"""
-    if isinstance(obj, dict):
-        return str(i18n.get(str(obj.get("id"))) or "")
-    return ""
+    return localized_text(obj, translations=i18n)
 
 
 def _tier_text(d: dict, lv, default: str = "") -> str:
@@ -3223,14 +3222,17 @@ def _first_value(data: dict[str, Any], *keys: str) -> Any:
 
 def _first_text(data: dict[str, Any], *keys: str) -> str:
     value = _first_value(data, *keys)
+    text = localized_text(value)
+    if text:
+        return text
     if isinstance(value, dict):
-        value = _first_value(value, "name", "text", "value", "url")
-    return str(value or "").strip()
+        return localized_text(_first_value(value, "url"))
+    return ""
 
 
 def _text_list(value: Any) -> list[str]:
     if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
+        return [text for item in value if (text := localized_text(item))]
     if isinstance(value, str):
         return [item.strip() for item in re.split(r"[,，/、\s]+", value) if item.strip()]
     return []
@@ -3265,8 +3267,8 @@ def build_weapon_view(raw: dict[str, Any], richtext: dict[str, Any] | None = Non
     hero = attrs.get("hero") or {}
     stats = attrs.get("stats") or {}
     skills = (attrs.get("skills") or {}).get("skills") or []
-    title = str(article.get("title") or "")
-    name = str(hero.get("name") or title.split("/", 1)[-1] or "")
+    title = _first_text(article, "title")
+    name = _first_text(hero, "name") or title.split("/", 1)[-1] or ""
     max_level = int(hero.get("maxLv") or 0)
     max_atk = next((row.get("atk") for row in stats.get("curve", []) if row.get("lv") == max_level), None)
     if max_atk is None:
@@ -3278,9 +3280,9 @@ def build_weapon_view(raw: dict[str, Any], richtext: dict[str, Any] | None = Non
         title=title or f"武器/{name}",
         weapon_id=_fz_weapon_id(skills),
         source_name="api.fz.wiki",
-        english_name=str(hero.get("nameEn") or ""),
+        english_name=_first_text(hero, "nameEn"),
         rarity=int(hero.get("rarity") or 0),
-        weapon_type=str(hero.get("weaponType") or "未知武器"),
+        weapon_type=_first_text(hero, "weaponType") or "未知武器",
         max_level=max_level,
         max_atk=max_atk,
         icon_url=_fz_asset_raw_url(hero.get("iconUrl")),
@@ -3300,8 +3302,8 @@ def build_warfarin_weapon_view(raw: dict[str, Any]) -> WeaponView:
     upgrade = data.get("weaponUpgradeTemplateTable") or {}
     skill_table = data.get("skillPatchTable") or {}
 
-    name = str(meta.get("name") or item.get("name") or "").strip()
-    slug = str(meta.get("slug") or "").strip() or _weapon_slug(name)
+    name = _first_text(meta, "name") or _first_text(item, "name")
+    slug = _first_text(meta, "slug") or _weapon_slug(name)
     max_level = int(basic.get("maxLv") or 0)
     max_atk = _warfarin_weapon_max_atk(upgrade.get("list") or [], max_level)
     weapon_type_id = str(basic.get("weaponType") or "")
@@ -3313,7 +3315,7 @@ def build_warfarin_weapon_view(raw: dict[str, Any]) -> WeaponView:
         title=f"Warfarin/{slug}",
         weapon_id=str(basic.get("weaponId") or meta.get("id") or ""),
         source_name="Warfarin Wiki",
-        english_name=str(basic.get("engName") or ""),
+        english_name=_first_text(basic, "engName"),
         rarity=int(basic.get("rarity") or item.get("rarity") or 0),
         weapon_type=weapon_type,
         max_level=max_level,
@@ -3442,7 +3444,7 @@ def _build_weapon_skill(raw: dict[str, Any]) -> WeaponSkillView:
 
 
 def clean_text(value: Any) -> str:
-    text = str(value or "")
+    text = localized_text(value)
     text = re.sub(r"<[@#]?[A-Za-z0-9_.-]+>", "", text)
     text = re.sub(r"</>", "", text)
     text = re.sub(r"<[^>]+>", "", text)

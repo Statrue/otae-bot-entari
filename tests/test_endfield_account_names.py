@@ -3,6 +3,7 @@ from hashlib import md5
 
 from plugins.endfield.account_detail_names import build_account_detail_name_map
 from plugins.endfield.account_detail_service import build_account_detail_view
+from plugins.endfield.account_i18n import localized_text, server_label
 
 
 class EndfieldAccountDetailNameTests(unittest.TestCase):
@@ -75,6 +76,20 @@ class EndfieldAccountDetailNameTests(unittest.TestCase):
             {"1": {"text": "对象格式中文角色"}},
         )
         self.assertEqual(name_map.character_names["chr_1"], "对象格式中文角色")
+
+    def test_localized_text_handles_locale_objects_and_server_aliases(self):
+        self.assertEqual(
+            localized_text({"zh-CN": "中文名称", "en": "English Name"}),
+            "中文名称",
+        )
+        self.assertEqual(
+            localized_text(
+                {"id": "name_1"},
+                translations={"name_1": {"zh": "翻译名称", "en": "Translated Name"}},
+            ),
+            "翻译名称",
+        )
+        self.assertEqual(server_label({"en": "China"}), "国服")
 
     def test_account_detail_prefers_akedata_names_over_api_names(self):
         detail = {

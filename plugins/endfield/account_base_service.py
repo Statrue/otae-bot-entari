@@ -16,7 +16,7 @@ from .account_base_models import (
     SpaceshipRoomView,
 )
 from .account_detail_names import AccountDetailNameMap
-from .account_i18n import server_label
+from .account_i18n import localized_text, server_label
 from .account_store import EndfieldStore, SettlementSnapshot
 from .gacha import format_timestamp
 
@@ -420,9 +420,7 @@ def _sequence(value: Any) -> tuple[Any, ...]:
 
 
 def _text(value: Any) -> str:
-    if value is None or isinstance(value, (dict, list, tuple)):
-        return ""
-    return str(value).strip()
+    return localized_text(value)
 
 
 def _mapped_text(names: Mapping[str, str], identifier: Any, fallback: Any) -> str:

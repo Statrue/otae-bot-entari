@@ -534,6 +534,28 @@ class EndfieldAccountBaseViewTests(unittest.TestCase):
         self.assertAlmostEqual(worker.drain_percent_per_hour, 7.2 * 0.82)
         self.assertAlmostEqual(worker.recovery_percent_per_hour, 12.0 * 1.12)
 
+    def test_localizes_mapping_shaped_base_fields(self):
+        detail = account_base_fixture()
+        detail["base"]["name"] = {"zh-CN": "中文管理员", "en": "English Admin"}
+        detail["base"]["serverName"] = {"en": "China"}
+        detail["domain"][0]["name"] = {"zh": "中文地区", "en": "English Region"}
+        detail["domain"][0]["settlements"][0]["name"] = {
+            "zh": "中文据点",
+            "en": "English Settlement",
+        }
+        detail["chars"][0]["charData"]["name"] = {
+            "zh": "中文派遣员",
+            "en": "English Officer",
+        }
+
+        view = self.build(detail)
+
+        self.assertEqual(view.nickname, "中文管理员")
+        self.assertEqual(view.server_name, "国服")
+        self.assertEqual(view.regions[0].name, "中文地区")
+        self.assertEqual(view.regions[0].settlements[0].name, "中文据点")
+        self.assertEqual(view.regions[0].settlements[0].officer_name, "中文派遣员")
+
     def test_maps_room_character_id_from_spaceship_skill_node(self):
         self.assertEqual(
             account_base_service_module._spaceship_skill_char_id(
@@ -1147,6 +1169,27 @@ class EndfieldOfficialClientTests(unittest.IsolatedAsyncioTestCase):
         }
         roles = client_module._extract_endfield_roles(payload)
         self.assertEqual((roles[0].binding_uid, roles[0].role_id), ("binding-uid", "role"))
+
+    def test_skland_binding_parser_localizes_role_fields(self):
+        payload = {
+            "code": 0,
+            "data": {"list": [{
+                "appCode": "endfield",
+                "bindingList": [{
+                    "uid": "binding-uid",
+                    "roles": [{
+                        "roleId": "role",
+                        "serverId": "1",
+                        "nickname": {"zh": "中文角色", "en": "English Role"},
+                        "serverName": {"en": "China"},
+                    }],
+                }],
+            }]},
+        }
+
+        roles = client_module._extract_endfield_roles(payload)
+
+        self.assertEqual((roles[0].nickname, roles[0].server_name), ("中文角色", "China"))
 
     def test_gacha_binding_parser_keeps_binding_uid_for_each_server_role(self):
         payload = {

@@ -5,6 +5,7 @@ from hashlib import md5
 from dataclasses import replace
 import unittest
 
+from plugins.endfield.account_detail_names import AccountDetailNameMap
 from plugins.endfield.account_investment_draw import _render_detail_html, _render_summary_html
 from plugins.endfield.account_investment_models import InvestmentResourceView
 from plugins.endfield.account_investment_service import (
@@ -150,6 +151,27 @@ class InvestmentCalculationTests(unittest.TestCase):
         self.assertEqual(view.missing, ())
         self.assertEqual(view.contributions[0].name, "测试干员")
         self.assertGreater(view.contributions[0].total_stamina, 0)
+
+    def test_localizes_account_identity_and_prefers_akedata_character_name(self):
+        detail = self._detail()
+        detail["base"]["name"] = {"zh": "中文账号", "en": "English Account"}
+        detail["chars"][0]["charData"]["name"] = {
+            "zh": "接口中文干员",
+            "en": "English Operator",
+        }
+        name_map = AccountDetailNameMap(character_names={"char_a": "AKEData中文干员"})
+
+        view = build_account_investment_view(
+            detail,
+            uid="****1234",
+            server_name={"en": "China"},
+            catalog=_catalog(),
+            name_map=name_map,
+        )
+
+        self.assertEqual(view.nickname, "中文账号")
+        self.assertEqual(view.server_name, "国服")
+        self.assertEqual(view.contributions[0].name, "AKEData中文干员")
 
     def test_missing_character_static_row_is_a_lower_bound(self):
         detail = {"base": {}, "chars": [{"charData": {"id": "new_char", "name": "新干员"}, "level": 20}]}

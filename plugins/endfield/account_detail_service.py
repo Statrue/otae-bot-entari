@@ -10,7 +10,7 @@ from .account_detail_models import (
     AccountStatView,
     AccountWeaponView,
 )
-from .account_i18n import semantic_key, semantic_label, server_label
+from .account_i18n import localized_text, semantic_key, semantic_label, server_label
 from .account_detail_names import AccountDetailNameMap
 from .gacha import format_timestamp
 
@@ -317,9 +317,7 @@ def _sequence(value: Any) -> tuple[Any, ...]:
 
 
 def _text(value: Any) -> str:
-    if value is None or isinstance(value, (dict, list, tuple)):
-        return ""
-    return str(value).strip()
+    return localized_text(value)
 
 
 def _int_or_none(value: Any) -> int | None:

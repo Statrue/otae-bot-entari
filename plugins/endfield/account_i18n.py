@@ -84,11 +84,49 @@ _SERVER_LABELS: dict[str, str] = {
     "亚服": "亚服",
 }
 
+_LOCALE_KEYS = ("zh-CN", "zh_cn", "zhCN", "zh", "cn", "chs", "简体中文")
+
+
+def localized_text(
+    value: Any,
+    translations: Mapping[str, Any] | None = None,
+    default: str = "",
+) -> str:
+    """Return the best available Chinese text from a mixed API text value.
+
+    Endfield data uses several shapes for the same field: a bare string, a
+    ``{zh, en}`` object, or an AKEData ``{id, text}`` reference.  Keep this
+    parsing in one place so every card follows the same CN-first fallback.
+    """
+    if value is None or isinstance(value, (list, tuple, set)):
+        return default
+    if not isinstance(value, Mapping):
+        return str(value).strip() or default
+
+    for key in _LOCALE_KEYS:
+        candidate = value.get(key)
+        text = localized_text(candidate, translations, "")
+        if text:
+            return text
+
+    text_id = value.get("id")
+    if text_id is not None and translations:
+        candidate = translations.get(str(text_id))
+        text = localized_text(candidate, None, "")
+        if text:
+            return text
+
+    for key in ("text", "value", "name", "label", "en", "default"):
+        text = localized_text(value.get(key), translations, "")
+        if text:
+            return text
+    return default
+
 
 def semantic_key(value: Any) -> str:
     if isinstance(value, Mapping):
-        return _text(value.get("key"))
-    raw = _text(value)
+        return localized_text(value.get("key"))
+    raw = localized_text(value)
     return raw if raw in SEMANTIC_LABELS else ""
 
 
@@ -101,17 +139,13 @@ def semantic_label(value: Any, default: str = "") -> str:
 
 
 def server_label(value: Any, default: str = "") -> str:
-    raw = _text(value) or default
+    raw = localized_text(value) or default
     return _SERVER_LABELS.get(raw.casefold(), raw)
 
 
 def _semantic_value(value: Any, default: str = "") -> str:
-    if isinstance(value, Mapping):
-        return _text(value.get("value")) or default
-    return _text(value) or default
+    return localized_text(value, default=default)
 
 
 def _text(value: Any) -> str:
-    if value is None or isinstance(value, (dict, list, tuple)):
-        return ""
-    return str(value).strip()
+    return localized_text(value)

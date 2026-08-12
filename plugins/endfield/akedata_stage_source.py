@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from math import isfinite
 from typing import Any
 
+from .account_i18n import localized_text
 from .client import WarfarinClient
 from .stage_models import (
     MonumentStageDetails,
@@ -415,16 +416,7 @@ def _stage_name(row: dict[str, Any], text_table: dict[str, Any]) -> str:
 
 
 def _translated(reference: Any, text_table: dict[str, Any]) -> str:
-    if not isinstance(reference, dict):
-        return ""
-    embedded = str(reference.get("text") or "").strip()
-    if embedded:
-        return embedded
-    text_id = reference.get("id")
-    if text_id in (None, 0, "0"):
-        return ""
-    value = text_table.get(str(text_id), "")
-    return str(value or "").strip()
+    return localized_text(reference, translations=text_table)
 
 
 def _mechanics(value: str) -> tuple[str, ...]:

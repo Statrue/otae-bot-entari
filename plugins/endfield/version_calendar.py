@@ -11,6 +11,7 @@ from typing import Any
 from loguru import logger
 
 from .akedata_stage_source import AkeDataVersion, parse_akedata_version
+from .account_i18n import localized_text
 from .client import WarfarinAPIError, WarfarinClient
 from .stage_source import StageDataIncomplete
 
@@ -302,15 +303,7 @@ def _hydrate_entry(
 
 
 def _translated(reference: Any, text_table: dict[str, Any]) -> str:
-    if not isinstance(reference, dict):
-        return ""
-    embedded = str(reference.get("text") or "").strip()
-    if embedded:
-        return embedded
-    text_id = reference.get("id")
-    if text_id in (None, 0, "0"):
-        return ""
-    return str(text_table.get(str(text_id), "") or "").strip()
+    return localized_text(reference, translations=text_table)
 
 
 def _time_range(value: Any) -> tuple[str, str | None]:

@@ -960,6 +960,8 @@ async def _render_account_currency(
             period_label=period_label,
         )
         return await _finish_pngs(matcher, cards)
+    except _ExitException:
+        raise
     except Exception:
         logger.exception("[endfield] currency log card render failed")
         report = format_currency_log_report(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from difflib import SequenceMatcher
 import re
 from typing import Iterable, Sequence
@@ -36,6 +37,17 @@ GACHA_ALIASES = {"抽卡", "gacha"}
 GACHA_HISTORY_ALIASES = {"抽卡记录", "历史抽卡", "gacha-history", "history"}
 GACHA_SYNC_ALIASES = {"抽卡同步", "同步抽卡", "gacha-sync", "sync"}
 GACHA_IMPORT_ALIASES = {"抽卡导入", "小黑盒导入", "xhh-import", "gacha-import", "import"}
+CURRENCY_LOG_ALIASES = {
+    "资源流水",
+    "资源记录",
+    "货币流水",
+    "流水",
+    "currency-log",
+    "currencylog",
+    "resource-log",
+    "resourcelog",
+    "logs",
+}
 MEDAL_ALIASES = {"奖章", "蚀刻章", "medal", "medals"}
 MEDAL_REFRESH_ALIASES = {"刷新", "refresh", "update"}
 MEDAL_MISSING_ALIASES = {"缺章", "未获得", "missing"}
@@ -110,6 +122,12 @@ class ParsedEndfieldCommand:
     page: int = 1
     pool_filter: str = ""
     full: bool = False
+    currency_types: tuple[int, ...] = ()
+    change_type: int = 0
+    start_date: str = ""
+    end_date: str = ""
+    days: int = 0
+    all_history: bool = False
     status_name: str = ""
     status_level: int = 0
     arts_strength: int = 0
@@ -260,6 +278,8 @@ def _parse_personal_command(parts: list[str]) -> ParsedEndfieldCommand | None:
         return ParsedEndfieldCommand("accounts", account_selector=" ".join(parts[1:]).strip())
     if head in INVESTMENT_ALIASES:
         return ParsedEndfieldCommand("account_investment", account_selector=" ".join(parts[1:]).strip())
+    if head in CURRENCY_LOG_ALIASES:
+        return _parse_currency_log_command(parts[1:])
     if head in PRIMARY_ALIASES:
         selector = " ".join(parts[1:]).strip()
         return ParsedEndfieldCommand("primary", account_selector=selector, error="请指定账号编号" if not selector else "")
@@ -303,6 +323,215 @@ def _parse_personal_command(parts: list[str]) -> ParsedEndfieldCommand | None:
             )
         return ParsedEndfieldCommand("medal_view")
     return None
+
+
+def _parse_currency_log_command(parts: list[str]) -> ParsedEndfieldCommand:
+    remaining: list[str] = []
+    currency_types: list[int] = []
+    date_values: list[str] = []
+    start_date = ""
+    end_date = ""
+    days = 0
+    change_type = 0
+    all_history = False
+    index = 0
+
+    while index < len(parts):
+        part = parts[index]
+        lowered = part.casefold()
+        option, equals, inline_value = part.partition("=")
+        option_lower = option.casefold()
+        if option_lower in {"--资源", "--币种", "--currency", "--currencies", "--resource", "-r"}:
+            value, index, error = _take_currency_option_value(parts, index, inline_value if equals else "")
+            if error:
+                return ParsedEndfieldCommand("currency_log", error=error)
+            parsed, error = _parse_currency_types(value)
+            if error:
+                return ParsedEndfieldCommand("currency_log", error=error)
+            currency_types.extend(parsed)
+            continue
+        if option_lower in {"--类型", "--变动", "--change", "--change-type", "-t"}:
+            value, index, error = _take_currency_option_value(parts, index, inline_value if equals else "")
+            if error:
+                return ParsedEndfieldCommand("currency_log", error=error)
+            parsed = _parse_change_type(value)
+            if parsed is None:
+                return ParsedEndfieldCommand("currency_log", error=f"不支持的流水类型 {value}，可选全部、获取、消耗")
+            if change_type and change_type != parsed:
+                return ParsedEndfieldCommand("currency_log", error="只能指定一个流水类型")
+            change_type = parsed
+            continue
+        if option_lower in {"--开始", "--起始", "--from", "--start"}:
+            value, index, error = _take_currency_option_value(parts, index, inline_value if equals else "")
+            if error:
+                return ParsedEndfieldCommand("currency_log", error=error)
+            normalized = _normalize_currency_date(value)
+            if normalized is None:
+                return ParsedEndfieldCommand("currency_log", error=f"日期格式不正确：{value}")
+            if start_date:
+                return ParsedEndfieldCommand("currency_log", error="只能指定一个开始日期")
+            start_date = normalized
+            continue
+        if option_lower in {"--结束", "--截止", "--to", "--end"}:
+            value, index, error = _take_currency_option_value(parts, index, inline_value if equals else "")
+            if error:
+                return ParsedEndfieldCommand("currency_log", error=error)
+            normalized = _normalize_currency_date(value)
+            if normalized is None:
+                return ParsedEndfieldCommand("currency_log", error=f"日期格式不正确：{value}")
+            if end_date:
+                return ParsedEndfieldCommand("currency_log", error="只能指定一个结束日期")
+            end_date = normalized
+            continue
+        if option_lower in {"--天数", "--天", "--days", "--day", "-d"}:
+            value, index, error = _take_currency_option_value(parts, index, inline_value if equals else "")
+            if error:
+                return ParsedEndfieldCommand("currency_log", error=error)
+            if not re.fullmatch(r"\d+", value) or int(value) <= 0:
+                return ParsedEndfieldCommand("currency_log", error="天数必须是大于 0 的整数")
+            parsed_days = int(value)
+            if days and days != parsed_days:
+                return ParsedEndfieldCommand("currency_log", error="只能指定一个查询天数")
+            days = parsed_days
+            continue
+        if option_lower in {"-a", "--all", "--全部"}:
+            if equals and inline_value.strip():
+                return ParsedEndfieldCommand("currency_log", error=f"{part} 不需要参数")
+            all_history = True
+            index += 1
+            continue
+
+        range_values = _currency_date_values(part)
+        if range_values is not None:
+            if not range_values:
+                return ParsedEndfieldCommand("currency_log", error=f"日期格式不正确：{part}")
+            date_values.extend(range_values)
+            index += 1
+            continue
+        if lowered in _CURRENCY_TYPE_ALIASES:
+            currency_types.append(_CURRENCY_TYPE_ALIASES[lowered])
+        elif lowered in _CHANGE_TYPE_ALIASES:
+            parsed = _CHANGE_TYPE_ALIASES[lowered]
+            if change_type and change_type != parsed:
+                return ParsedEndfieldCommand("currency_log", error="只能指定一个流水类型")
+            change_type = parsed
+        else:
+            remaining.append(part)
+        index += 1
+
+    if date_values:
+        if start_date or end_date:
+            return ParsedEndfieldCommand("currency_log", error="日期请使用位置参数或 --开始/--结束，不要混用")
+        if len(date_values) > 2:
+            return ParsedEndfieldCommand("currency_log", error="最多指定开始和结束两个日期")
+        start_date = date_values[0]
+        end_date = date_values[-1]
+    if all_history and (start_date or end_date):
+        return ParsedEndfieldCommand("currency_log", error="--all 不能与日期范围同时使用")
+    if days and (start_date or end_date):
+        return ParsedEndfieldCommand("currency_log", error="天数不能与日期范围同时使用")
+    if all_history and days:
+        return ParsedEndfieldCommand("currency_log", error="--all 不能与天数同时使用")
+    return ParsedEndfieldCommand(
+        "currency_log",
+        account_selector=" ".join(remaining).strip(),
+        currency_types=tuple(dict.fromkeys(currency_types)),
+        change_type=change_type,
+        start_date=start_date,
+        end_date=end_date,
+        days=days,
+        all_history=all_history,
+    )
+
+
+_CURRENCY_TYPE_ALIASES = {
+    "源石": 1,
+    "originium": 1,
+    "嵌晶玉": 2,
+    "晶玉": 2,
+    "diamond": 2,
+    "crystal": 2,
+    "武库配额": 3,
+    "配额": 3,
+    "quota": 3,
+}
+
+_CHANGE_TYPE_ALIASES = {
+    "全部": 0,
+    "all": 0,
+    "获取": 1,
+    "获得": 1,
+    "收入": 1,
+    "gain": 1,
+    "消耗": 2,
+    "支出": 2,
+    "consume": 2,
+    "spend": 2,
+}
+
+
+def _take_currency_option_value(parts: list[str], index: int, inline_value: str) -> tuple[str, int, str]:
+    if inline_value.strip():
+        return inline_value.strip(), index + 1, ""
+    if index + 1 >= len(parts):
+        return "", index + 1, f"{parts[index]} 后需要参数"
+    return parts[index + 1].strip(), index + 2, ""
+
+
+def _parse_currency_types(value: str) -> tuple[tuple[int, ...], str]:
+    tokens = [token.strip() for token in re.split(r"[+,，、/／|｜]+", str(value or "")) if token.strip()]
+    if not tokens:
+        return (), "资源类型不能为空"
+    result: list[int] = []
+    for token in tokens:
+        lowered = token.casefold()
+        if lowered in {"全部", "all"}:
+            result.extend((1, 2, 3))
+            continue
+        if token.isdecimal() and int(token) in {1, 2, 3}:
+            result.append(int(token))
+            continue
+        currency_type = _CURRENCY_TYPE_ALIASES.get(lowered)
+        if currency_type is None:
+            return (), f"不支持的资源类型 {token}，可选源石、嵌晶玉、武库配额"
+        result.append(currency_type)
+    return tuple(dict.fromkeys(result)), ""
+
+
+def _parse_change_type(value: str) -> int | None:
+    lowered = str(value or "").strip().casefold()
+    if lowered.isdecimal() and int(lowered) in {0, 1, 2}:
+        return int(lowered)
+    return _CHANGE_TYPE_ALIASES.get(lowered)
+
+
+def _currency_date_values(value: str) -> tuple[str, ...] | None:
+    text = str(value or "").strip()
+    if re.fullmatch(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}", text) or text.casefold() in {"今天", "today", "昨天", "yesterday"}:
+        normalized = _normalize_currency_date(text)
+        return (normalized,) if normalized else ()
+    match = re.fullmatch(
+        r"(\d{4}[-/]\d{1,2}[-/]\d{1,2}|今天|today|昨天|yesterday)\s*(?:~|～|至|到)\s*"
+        r"(\d{4}[-/]\d{1,2}[-/]\d{1,2}|今天|today|昨天|yesterday)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    start = _normalize_currency_date(match.group(1))
+    end = _normalize_currency_date(match.group(2))
+    return (start, end) if start and end else ()
+
+
+def _normalize_currency_date(value: str) -> str | None:
+    text = str(value or "").strip()
+    if text.casefold() in {"今天", "today", "昨天", "yesterday"}:
+        return text.casefold()
+    normalized = text.replace("/", "-")
+    try:
+        return date.fromisoformat(normalized).isoformat()
+    except ValueError:
+        return None
 
 
 def _parse_pool_option(parts: list[str]) -> tuple[list[str], str, str]:
@@ -428,31 +657,33 @@ def format_help() -> str:
     return "\n".join(
         [
             "终末地查询用法：",
-            "  /zmd 绑定 | /zmd 添加账号（仅私聊；国服支持 Token/短信，二维码绑定暂不支持；亚服支持 Token；可重复追加多个账号）",
-            "  /zmd 账号 [编号]（账号详情图：干员、装备、武器、技能等级、潜能）",
-            "  /zmd 养成统计 [编号]（当前档案可见养成投入与材料明细；别名：资源消耗）",
-            "  /zmd 账号 基建 [账号]（据点存票、增长速度与帝江号心情）",
-            "  /zmd 主账号 <编号> | /zmd 解绑 <编号>（仅私聊）",
-            "  /zmd 签到 [全部|编号|昵称|UID后四位]",
-            "  /zmd 抽卡 [账号] | /zmd 抽卡同步 [账号] [--full]",
-            "  /zmd 抽卡导入 [账号]（仅私聊，手机号验证码导入小黑盒历史统计）",
-            "  /zmd 抽卡记录 [账号] [页码] [--池 <名称>]",
-            "  /zmd 奖章（查看蚀刻章总数与本版本新增）",
-            "  /zmd 奖章 刷新（重新抓取 AKEData 数据并更新上一游戏版本基线）",
-            "  /zmd 奖章 缺章 [账号]（查询自己未获得/未升满/未镀层）",
-            "  /zmd 速算 2腐蚀 200（效果可替换为导电或碎甲）",
-            "  /zmd 版本日历（查看当前版本全部开放日程）",
+            "  /ef 绑定 | /ef 添加账号（仅私聊；国服支持 Token/短信，二维码绑定暂不支持；亚服支持 Token；可重复追加多个账号）",
+            "  /ef 账号 [编号]（账号详情图：干员、装备、武器、技能等级、潜能）",
+            "  /ef 养成统计 [编号]（当前档案可见养成投入与材料明细；别名：资源消耗）",
+            "  /ef 资源流水 [账号] [日期|开始日期 结束日期|--天数 N/-d N]（源石、嵌晶玉、武库配额；默认最近一个月）",
+            "  /ef 资源流水 [账号] [--资源 源石|嵌晶玉|武库配额] [--类型 获取|消耗] [-a/--all]",
+            "  /ef 账号 基建 [账号]（据点存票、增长速度与帝江号心情）",
+            "  /ef 主账号 <编号> | /ef 解绑 <编号>（仅私聊）",
+            "  /ef 签到 [全部|编号|昵称|UID后四位]",
+            "  /ef 抽卡 [账号] | /ef 抽卡同步 [账号] [--full]",
+            "  /ef 抽卡导入 [账号]（仅私聊，手机号验证码导入小黑盒历史统计）",
+            "  /ef 抽卡记录 [账号] [页码] [--池 <名称>]",
+            "  /ef 奖章（查看蚀刻章总数与本版本新增）",
+            "  /ef 奖章 刷新（重新抓取 AKEData 数据并更新上一游戏版本基线）",
+            "  /ef 奖章 缺章 [账号]（查询自己未获得/未升满/未镀层）",
+            "  /ef 速算 2腐蚀 200（效果可替换为导电或碎甲）",
+            "  /ef 版本日历（查看当前版本全部开放日程）",
             "",
-            "  /ef <关键词> 或 /zmd <关键词>",
+            "  /ef <关键词>",
             "  /ef 干员 <名称> | /ef op <名称>",
             "  /ef 武器 <名称> | /ef wp <名称>",
             "  /ef 装备 <名称> | /ef eq <名称>",
             "  /ef 装备（查看全部套组）| /ef 装备 <套组名>",
-            "  /zmd 装备 主力量 副敏捷（按主副属性筛选）",
-            "  /zmd 关卡 | /zmd 副本（查看关卡资料目录）",
-            "  /zmd 副本 <关卡名> [变体名|总览]",
+            "  /ef 装备 主力量 副敏捷（按主副属性筛选）",
+            "  /ef 关卡 | /ef 副本（查看关卡资料目录）",
+            "  /ef 副本 <关卡名> [变体名|总览]",
             "  /ef 配装（交互输入干员、可选武器与装备）",
-            "  /zmd 配装 佩丽卡 脉冲源石配件 脉冲甲 脉冲源石配件 超轻域手 角色潜能2 武器潜能3",
+            "  /ef 配装 佩丽卡 脉冲源石配件 脉冲甲 脉冲源石配件 超轻域手 角色潜能2 武器潜能3",
             "  /ef 搜索 <关键词> | /efs <关键词>",
             "  /ef <关键词> --source <fz|akedata|warfarin>",
             "  /ef 数据源",

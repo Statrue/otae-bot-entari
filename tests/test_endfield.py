@@ -662,7 +662,7 @@ class EndfieldCommandParserTests(unittest.TestCase):
 
         self.assertIn("角色潜能2 武器潜能3", text)
         self.assertIn("武器技能1等级5", text)
-        self.assertIn("/zmd 版本日历", text)
+        self.assertIn("/ef 版本日历", text)
 
     def test_current_version_calendar_manifest_is_data_driven_and_complete(self):
         calendar_module = _load_endfield_module("version_calendar")
@@ -835,15 +835,16 @@ class EndfieldCommandParserTests(unittest.TestCase):
         spec = (ROOT / "scripts/help_pages.json").read_text(encoding="utf-8")
 
         with Image.open(image_path) as image:
-            self.assertEqual((image.size, image.mode), ((1075, 761), "RGBA"))
-        self.assertIn("/zmd 绑定 / 添加账号  可重复追加多个账号（仅私聊）", spec)
-        self.assertIn("/zmd 账号 [编号]  账号详情图：干员配装总览", spec)
-        self.assertIn("/zmd 账号 基建 [账号]  据点与帝江号", spec)
-        self.assertIn("/zmd 抽卡同步 [账号] [--full]", spec)
-        self.assertIn("/zmd 抽卡记录 [账号] [页码] [--池 名称]", spec)
-        self.assertIn("/zmd 抽卡导入 [账号]（仅私聊）", spec)
-        self.assertIn("/zmd 速算 2腐蚀 200", spec)
-        self.assertIn("/zmd 速算 <等级><效果> <技艺强度>", spec)
+            self.assertEqual((image.size, image.mode), ((1204, 852), "RGBA"))
+        self.assertIn("/ef 绑定 / 添加账号  多账号追加（仅私聊）", spec)
+        self.assertIn("/ef 账号 [编号]  账号详情图：干员配装总览", spec)
+        self.assertIn("/ef 账号 基建 [账号]  据点与帝江号", spec)
+        self.assertIn("/ef 流水 [账号] [-d N]  汇总（-a全量）", spec)
+        self.assertIn("/ef 抽卡同步 [账号] [--full]", spec)
+        self.assertIn("/ef 抽卡记录 [账号] [页码] [--池 名称]", spec)
+        self.assertIn("/ef 抽卡导入 [账号]（仅私聊）", spec)
+        self.assertIn("/ef 速算 2腐蚀 200", spec)
+        self.assertIn("/ef 速算 <等级><效果> <技艺强度>", spec)
         self.assertIn("等级 1–4；支持腐蚀 / 导电 / 碎甲", spec)
         self.assertIn("返回最终数值、效果构成和持续时间", spec)
         self.assertIn("超限自动分页", spec)

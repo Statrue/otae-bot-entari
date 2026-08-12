@@ -13,6 +13,7 @@ import tempfile
 import types
 import unittest
 from dataclasses import replace
+from datetime import date
 from unittest import mock
 from io import BytesIO
 from pathlib import Path
@@ -43,6 +44,7 @@ crypto = _load(f"{PACKAGE}.account_crypto", "plugins/endfield/account_crypto.py"
 store_module = _load(f"{PACKAGE}.account_store", "plugins/endfield/account_store.py")
 xhh_module = _load(f"{PACKAGE}.xhh_client", "plugins/endfield/xhh_client.py")
 client_module = _load(f"{PACKAGE}.account_client", "plugins/endfield/account_client.py")
+currency_module = _load(f"{PACKAGE}.account_currency", "plugins/endfield/account_currency.py")
 gacha_module = _load(f"{PACKAGE}.gacha", "plugins/endfield/gacha.py")
 gacha_assets_module = sys.modules[f"{PACKAGE}.gacha_assets"]
 models_module = _load(f"{PACKAGE}.models", "plugins/endfield/models.py")
@@ -80,6 +82,40 @@ class EndfieldPersonalCommandTests(unittest.TestCase):
         attendance = commands_module.parse_command("签到 UID1234")
         self.assertEqual((attendance.action, attendance.account_selector), ("attendance", "UID1234"))
 
+    def test_parses_currency_log_filters_and_dates(self):
+        parsed = commands_module.parse_command("资源流水 2 2026-08-01 2026-08-12 源石 消耗")
+        self.assertEqual(parsed.action, "currency_log")
+        self.assertEqual(parsed.account_selector, "2")
+        self.assertEqual((parsed.currency_types, parsed.change_type), ((1,), 2))
+        self.assertEqual((parsed.start_date, parsed.end_date), ("2026-08-01", "2026-08-12"))
+
+        ranged = commands_module.parse_command("流水 --资源 源石,嵌晶玉 --类型 获取 2026/08/01~2026/08/12")
+        self.assertEqual((ranged.currency_types, ranged.change_type), ((1, 2), 1))
+        self.assertEqual((ranged.start_date, ranged.end_date), ("2026-08-01", "2026-08-12"))
+
+        all_history = commands_module.parse_command("流水 2 -a --资源 源石")
+        self.assertEqual((all_history.account_selector, all_history.currency_types), ("2", (1,)))
+        self.assertTrue(all_history.all_history)
+
+        days = commands_module.parse_command("流水 2 -d 7 --资源 源石")
+        self.assertEqual((days.account_selector, days.currency_types, days.days), ("2", (1,), 7))
+        self.assertEqual(commands_module.parse_command("流水 --天数=30").days, 30)
+
+    def test_currency_log_defaults_to_one_calendar_month(self):
+        start, end = currency_module.resolve_query_dates(today=date(2026, 8, 31))
+        self.assertEqual((start, end), (date(2026, 7, 31), date(2026, 8, 31)))
+        self.assertEqual(
+            currency_module.resolve_query_dates(days=7, today=date(2026, 8, 31)),
+            (date(2026, 8, 25), date(2026, 8, 31)),
+        )
+
+    def test_rejects_invalid_currency_log_options(self):
+        self.assertTrue(commands_module.parse_command("流水 --资源").error)
+        self.assertTrue(commands_module.parse_command("流水 2026-99-99").error)
+        self.assertTrue(commands_module.parse_command("流水 -d 0").error)
+        self.assertTrue(commands_module.parse_command("流水 -d 7 2026-08-01").error)
+        self.assertTrue(commands_module.parse_command("流水 -d 7 -a").error)
+
     def test_parses_gacha_history_page_pool_and_full(self):
         history = commands_module.parse_command("抽卡记录 小明 3 --池 联合寻访")
         self.assertEqual(history.action, "gacha_history")
@@ -116,9 +152,9 @@ class EndfieldPersonalCommandTests(unittest.TestCase):
 
     def test_help_documents_account_detail_command(self):
         help_text = commands_module.format_help()
-        self.assertIn("/zmd 账号 [编号]", help_text)
-        self.assertIn("/zmd 账号 基建 [账号]", help_text)
-        self.assertIn("/zmd 添加账号", help_text)
+        self.assertIn("/ef 账号 [编号]", help_text)
+        self.assertIn("/ef 账号 基建 [账号]", help_text)
+        self.assertIn("/ef 添加账号", help_text)
         self.assertIn("可重复追加多个账号", help_text)
 
 
@@ -705,6 +741,23 @@ class EndfieldCredentialAndStoreTests(unittest.TestCase):
         self.assertEqual(self.store.insert_gacha_records([record, record]), 1)
         self.assertEqual(self.store.count_gacha_records(role, "联合"), 1)
         self.assertEqual(self.store.list_gacha_records(role, pool_filter="联合")[0].item_name, "角色甲")
+
+    def test_currency_log_backup_upserts_by_seq_id_and_filters_display(self):
+        role = self.store.bind_roles(
+            "qq", "token", [store_module.RoleCandidate("bind", "1000", "1", "甲")], self.cipher
+        )[0]
+        records = (
+            client_module.CurrencyLogItem(1, 1, "13", 100, 100, 200, 10),
+            client_module.CurrencyLogItem(1, 2, "10", 30, 70, 300, 11),
+            client_module.CurrencyLogItem(1, 1, "13", 100, 100, 200, 10),
+        )
+        self.store.upsert_currency_logs(role, records)
+        stored = self.store.list_currency_logs(role, (1,), start_ts=200, end_ts=300)
+        self.assertEqual([item.seq_id for item in stored[1]], [10, 11])
+        gained = self.store.list_currency_logs(role, (1,), change_type=1)
+        self.assertEqual([item.seq_id for item in gained[1]], [10])
+        count = self.store.conn.execute("SELECT COUNT(*) FROM currency_logs").fetchone()[0]
+        self.assertEqual(count, 2)
 
     def test_gacha_upsert_backfills_free_pull_flag(self):
         role = self.store.bind_roles(
@@ -1793,6 +1846,64 @@ class EndfieldOfficialClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(headers["x-role-server-id"], "1")
         client.get_u8_token.assert_awaited_once_with("account-token", "binding")
         await http.aclose()
+
+    async def test_currency_logs_page_through_seq_id_and_stop_at_start(self):
+        captured = []
+
+        async def handler(request: httpx.Request):
+            body = json.loads(request.content)
+            captured.append(body)
+            if "seqId" not in body:
+                return httpx.Response(200, json={
+                    "code": 0,
+                    "data": {
+                        "list": [
+                            {"currencyType": 1, "changeType": 1, "changeReason": "13", "changeNum": 100, "after": 300, "changeTime": 300, "seqId": 2},
+                            {"currencyType": 1, "changeType": 2, "changeReason": "10", "changeNum": 20, "after": 200, "changeTime": 200, "seqId": 1},
+                        ],
+                        "hasNext": True,
+                    },
+                })
+            return httpx.Response(200, json={
+                "code": 0,
+                "data": {
+                    "list": [
+                        {"currencyType": 1, "changeType": 1, "changeReason": "14", "changeNum": 5, "after": 105, "changeTime": 50, "seqId": 0},
+                    ],
+                    "hasNext": False,
+                },
+            })
+
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client = client_module.EndfieldOfficialClient(http)
+        client.get_u8_token = mock.AsyncMock(return_value="u8-token")
+        role = mock.Mock(binding_uid="binding", server_id="1")
+        with mock.patch.object(client_module.asyncio, "sleep", new=mock.AsyncMock()):
+            result = await client.currency_logs(
+                "account-token", role, currency_types=(1,), start_ts=100, end_ts=400, limit=2
+            )
+
+        self.assertEqual([item.seq_id for item in result[1]], [2, 1])
+        self.assertEqual(captured[1]["seqId"], 1)
+        self.assertEqual(captured[0]["currencyType"], 1)
+        self.assertEqual(captured[0]["limit"], 2)
+        client.get_u8_token.assert_awaited_once_with("account-token", "binding")
+        await http.aclose()
+
+    def test_aggregates_currency_logs_and_formats_reason_totals(self):
+        records = (
+            client_module.CurrencyLogItem(1, 1, "13", 100, 200, 1000, 1),
+            client_module.CurrencyLogItem(1, 2, "25", 30, 170, 1010, 2),
+        )
+        summary = currency_module.aggregate_currency_logs(records, 1)
+        self.assertEqual((summary.opening, summary.closing, summary.gain, summary.consume, summary.net), (100, 170, 100, 30, 70))
+        report = currency_module.format_currency_log_report(
+            (summary,), role_label="测试角色", start=currency_module.date(1970, 1, 1), end=currency_module.date(1970, 1, 1), change_type=0
+        )
+        self.assertIn("任务奖励", report)
+        self.assertIn("武库交易所消耗", report)
+        self.assertIn("类型汇总", report)
+        self.assertNotIn("变动后", report)
 
     async def test_character_and_weapon_record_mapping(self):
         captured_queries = []

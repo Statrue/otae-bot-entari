@@ -138,6 +138,31 @@ class GachaPage:
 
 
 @dataclass(frozen=True, slots=True)
+class CurrencyLogItem:
+    """One resource balance change returned by the customer-service API."""
+
+    currency_type: int
+    change_type: int
+    change_reason: str
+    change_num: int
+    after: int
+    change_time: int
+    seq_id: int
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -> "CurrencyLogItem":
+        return cls(
+            currency_type=_as_int(raw.get("currencyType")),
+            change_type=_as_int(raw.get("changeType")),
+            change_reason=str(raw.get("changeReason") or "0"),
+            change_num=_as_int(raw.get("changeNum")),
+            after=_as_int(raw.get("after")),
+            change_time=_as_int(raw.get("changeTime")),
+            seq_id=_as_int(raw.get("seqId")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class QrLoginTicket:
     scan_id: str
     scan_url: str
@@ -340,20 +365,7 @@ class EndfieldOfficialClient:
         return detail
 
     async def currency_balances(self, account_token: str, role: RoleCandidate | Any) -> dict[int, int]:
-        provider, raw_account_token = decode_account_credential(account_token)
-        if provider == ACCOUNT_PROVIDER_SKPORT:
-            raise EndfieldAPIError("查询终末地货币", message="亚服暂不支持货币查询")
-        role_token = await self.get_u8_token(account_token, str(role.binding_uid))
-        headers = {
-            "Accept": "application/json, text/plain, */*",
-            "Content-Type": "application/json",
-            "Origin": CUSTOMER_SERVICE_BASE,
-            "Referer": f"{CUSTOMER_SERVICE_BASE}/app/endfield/gamelogs/2",
-            "x-account-token": raw_account_token,
-            "x-role-token": role_token,
-            "x-role-server-id": str(role.server_id),
-            "x-hg-language": "zh-cn",
-        }
+        headers = await self._currency_headers(account_token, role, operation="查询终末地货币")
 
         async def fetch_balance(currency_type: int) -> int | None:
             payload = await self._json_request(
@@ -382,6 +394,108 @@ class EndfieldOfficialClient:
         if not balances and errors:
             raise errors[0]
         return balances
+
+    async def currency_logs(
+        self,
+        account_token: str,
+        role: RoleCandidate | Any,
+        *,
+        currency_types: tuple[int, ...] = CURRENCY_TYPES,
+        start_ts: int | None = None,
+        end_ts: int | None = None,
+        change_type: int = 0,
+        limit: int = 50,
+    ) -> dict[int, tuple[CurrencyLogItem, ...]]:
+        """Fetch resource logs in the requested time window for one role.
+
+        The customer-service API returns newest records first and uses the last
+        record's ``seqId`` as the cursor for the next page.  Passing ``None``
+        for ``start_ts`` fetches the complete available history; a bounded
+        ``start_ts`` stops as soon as a record falls before that timestamp.
+        """
+
+        if start_ts is not None and end_ts is not None and start_ts > end_ts:
+            raise ValueError("资源流水查询的开始时间不能晚于结束时间")
+        if int(change_type) not in {0, 1, 2}:
+            raise ValueError("不支持的流水类型，必须是 0（全部）、1（获取）或 2（消耗）")
+        requested_types = tuple(dict.fromkeys(int(item) for item in currency_types))
+        invalid_types = [item for item in requested_types if item not in CURRENCY_TYPES]
+        if invalid_types:
+            raise ValueError(f"不支持的资源类型：{', '.join(map(str, invalid_types))}")
+        if not requested_types:
+            return {}
+
+        headers = await self._currency_headers(account_token, role, operation="查询终末地资源流水")
+        page_limit = max(1, min(int(limit), 100))
+        result: dict[int, tuple[CurrencyLogItem, ...]] = {}
+        for currency_type in requested_types:
+            rows: list[CurrencyLogItem] = []
+            seq_id: int | None = None
+            while True:
+                body: dict[str, Any] = {
+                    "limit": page_limit,
+                    "currencyType": currency_type,
+                    "changeType": int(change_type),
+                }
+                if seq_id is not None:
+                    body["seqId"] = seq_id
+                payload = await self._json_request(
+                    "查询终末地资源流水",
+                    "POST",
+                    f"{CUSTOMER_SERVICE_BASE}{CURRENCY_LOG_PATH}",
+                    headers=headers,
+                    json_body=body,
+                )
+                data = payload.get("data") or {}
+                raw_items = (data.get("list") or []) if isinstance(data, dict) else []
+                if not isinstance(raw_items, list) or not raw_items:
+                    break
+
+                stop_early = False
+                page_rows: list[CurrencyLogItem] = []
+                for raw in raw_items:
+                    if not isinstance(raw, dict):
+                        continue
+                    item = CurrencyLogItem.from_api(raw)
+                    if end_ts is not None and item.change_time > end_ts:
+                        continue
+                    if start_ts is not None and item.change_time < start_ts:
+                        stop_early = True
+                        break
+                    page_rows.append(item)
+                rows.extend(page_rows)
+
+                has_next = data.get("hasNext") if isinstance(data, dict) else False
+                if has_next is None and isinstance(data, dict):
+                    has_next = data.get("hasMore")
+                if stop_early or not bool(has_next):
+                    break
+                next_seq_id = _as_int(raw_items[-1].get("seqId")) if isinstance(raw_items[-1], dict) else 0
+                if not next_seq_id or next_seq_id == seq_id:
+                    break
+                seq_id = next_seq_id
+                await asyncio.sleep(0.25)
+            result[currency_type] = tuple(rows)
+        return result
+
+    async def _currency_headers(
+        self, account_token: str, role: RoleCandidate | Any, *, operation: str
+    ) -> dict[str, str]:
+        provider, raw_account_token = decode_account_credential(account_token)
+        if provider == ACCOUNT_PROVIDER_SKPORT:
+            message = "亚服暂不支持货币查询" if operation == "查询终末地货币" else "亚服暂不支持资源流水查询"
+            raise EndfieldAPIError(operation, message=message)
+        role_token = await self.get_u8_token(account_token, str(role.binding_uid))
+        return {
+            "Accept": "application/json, text/plain, */*",
+            "Content-Type": "application/json",
+            "Origin": CUSTOMER_SERVICE_BASE,
+            "Referer": f"{CUSTOMER_SERVICE_BASE}/app/endfield/gamelogs/2",
+            "x-account-token": raw_account_token,
+            "x-role-token": role_token,
+            "x-role-server-id": str(role.server_id),
+            "x-hg-language": "zh-cn",
+        }
 
     async def endfield_card_detail(self, account_token: str, role: RoleCandidate | Any) -> dict[str, Any]:
         """查询森空岛终末地个人详情（含奖章进度）。

@@ -6,7 +6,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
 
 from .account_crypto import CredentialCipher, EncryptedCredential
 
@@ -247,6 +247,21 @@ class EndfieldStore:
                     last_error TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY(role_id, server_id, stream_key)
                 );
+                CREATE TABLE IF NOT EXISTS currency_logs (
+                    role_id TEXT NOT NULL,
+                    server_id TEXT NOT NULL,
+                    currency_type INTEGER NOT NULL,
+                    change_type INTEGER NOT NULL,
+                    change_reason TEXT NOT NULL DEFAULT '',
+                    change_num INTEGER NOT NULL DEFAULT 0,
+                    after_balance INTEGER NOT NULL DEFAULT 0,
+                    change_time INTEGER NOT NULL DEFAULT 0,
+                    seq_id INTEGER NOT NULL,
+                    fetched_at INTEGER NOT NULL,
+                    PRIMARY KEY(role_id, server_id, currency_type, seq_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_endfield_currency_history
+                    ON currency_logs(role_id, server_id, currency_type, change_time DESC, seq_id DESC);
                 CREATE TABLE IF NOT EXISTS settlement_snapshots (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     role_id TEXT NOT NULL,
@@ -430,6 +445,108 @@ class EndfieldStore:
             return self.list_roles(qq_user_id)
         role = self.resolve_role(qq_user_id, selector)
         return [role] if role else []
+
+    def upsert_currency_logs(self, role: EndfieldRole, items: Iterable[Any]) -> int:
+        rows = []
+        fetched_at = int(time.time())
+        for item in items:
+            rows.append(
+                (
+                    str(role.role_id),
+                    str(role.server_id),
+                    int(getattr(item, "currency_type", 0)),
+                    int(getattr(item, "change_type", 0)),
+                    str(getattr(item, "change_reason", "") or ""),
+                    int(getattr(item, "change_num", 0)),
+                    int(getattr(item, "after", 0)),
+                    int(getattr(item, "change_time", 0)),
+                    int(getattr(item, "seq_id", 0)),
+                    fetched_at,
+                )
+            )
+        if not rows:
+            return 0
+        with self._lock:
+            try:
+                self.conn.execute("BEGIN")
+                self.conn.executemany(
+                    """
+                    INSERT INTO currency_logs(
+                        role_id, server_id, currency_type, change_type, change_reason,
+                        change_num, after_balance, change_time, seq_id, fetched_at
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(role_id, server_id, currency_type, seq_id) DO UPDATE SET
+                        change_type = excluded.change_type,
+                        change_reason = excluded.change_reason,
+                        change_num = excluded.change_num,
+                        after_balance = excluded.after_balance,
+                        change_time = excluded.change_time,
+                        fetched_at = excluded.fetched_at
+                    """,
+                    rows,
+                )
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+        return len(rows)
+
+    def list_currency_logs(
+        self,
+        role: EndfieldRole,
+        currency_types: Sequence[int],
+        *,
+        start_ts: int | None = None,
+        end_ts: int | None = None,
+        change_type: int = 0,
+    ) -> dict[int, tuple[Any, ...]]:
+        requested_types = tuple(dict.fromkeys(int(item) for item in currency_types))
+        if not requested_types:
+            return {}
+        clauses = [
+            "role_id = ?",
+            "server_id = ?",
+            f"currency_type IN ({', '.join('?' for _ in requested_types)})",
+        ]
+        params: list[Any] = [str(role.role_id), str(role.server_id), *requested_types]
+        if start_ts is not None:
+            clauses.append("change_time >= ?")
+            params.append(int(start_ts))
+        if end_ts is not None:
+            clauses.append("change_time <= ?")
+            params.append(int(end_ts))
+        if int(change_type) in {1, 2}:
+            clauses.append("change_type = ?")
+            params.append(int(change_type))
+        with self._lock:
+            rows = self.conn.execute(
+                f"""
+                SELECT currency_type, change_type, change_reason, change_num,
+                       after_balance, change_time, seq_id
+                FROM currency_logs
+                WHERE {' AND '.join(clauses)}
+                ORDER BY change_time ASC, seq_id ASC
+                """,
+                params,
+            ).fetchall()
+        # Import lazily: account_client imports this store module for the
+        # existing role/gacha dataclasses.
+        from .account_client import CurrencyLogItem
+
+        grouped: dict[int, list[CurrencyLogItem]] = {item: [] for item in requested_types}
+        for row in rows:
+            grouped[int(row["currency_type"])].append(
+                CurrencyLogItem(
+                    currency_type=int(row["currency_type"]),
+                    change_type=int(row["change_type"]),
+                    change_reason=str(row["change_reason"] or "0"),
+                    change_num=int(row["change_num"]),
+                    after=int(row["after_balance"]),
+                    change_time=int(row["change_time"]),
+                    seq_id=int(row["seq_id"]),
+                )
+            )
+        return {currency_type: tuple(items) for currency_type, items in grouped.items()}
 
     def set_primary(self, qq_user_id: str, selector: str) -> EndfieldRole | None:
         role = self.resolve_role(qq_user_id, selector)

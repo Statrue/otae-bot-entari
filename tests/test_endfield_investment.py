@@ -104,7 +104,7 @@ class InvestmentCommandTests(unittest.TestCase):
             self.assertEqual(parsed.action, "account_investment")
             self.assertEqual(parsed.account_selector, "小明")
         self.assertEqual(parse_command("养成统计").account_selector, "")
-        self.assertIn("/zmd 养成统计 [编号]", format_help())
+        self.assertIn("/ef 养成统计 [编号]", format_help())
 
 
 class InvestmentCalculationTests(unittest.TestCase):

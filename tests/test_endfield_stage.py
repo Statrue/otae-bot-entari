@@ -552,7 +552,7 @@ class EndfieldStageCommandTests(unittest.TestCase):
         self.assertEqual((search.action, search.scope, search.query), ("search", "stage", "罗丹"))
 
     def test_help_and_source_list_stage(self):
-        self.assertIn("/zmd 副本 <关卡名> [变体名|总览]", commands.format_help())
+        self.assertIn("/ef 副本 <关卡名> [变体名|总览]", commands.format_help())
         self.assertIn("关卡：FZ Wiki、AkeData", commands.format_source())
         self.assertEqual(source_order("stage"), ("fz", "akedata"))
 

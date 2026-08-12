@@ -26,6 +26,7 @@ from .account_client import (
     ACCOUNT_PROVIDER_CN,
     ACCOUNT_PROVIDER_SKPORT,
     AttendanceResult,
+    CURRENCY_TYPES,
     EndfieldAPIError,
     EndfieldOfficialClient,
     encode_account_credential,
@@ -35,6 +36,14 @@ from .account_client import (
 from .account_crypto import CredentialCipher, CredentialKeyError
 from .account_store import EndfieldRole, EndfieldStore, RoleCandidate
 from .account_i18n import server_label
+from .account_currency import (
+    aggregate_currency_logs,
+    date_bounds as currency_date_bounds,
+    format_currency_log_report,
+    resolve_query_dates,
+    split_report,
+)
+from .account_currency_draw import draw_currency_log_cards
 from .aliases import add_alias, alias_targets
 from .commands import (
     EndfieldCandidate,
@@ -279,7 +288,7 @@ async def _handle_command(matcher, event: Event, command: ParsedEndfieldCommand)
         )
     if command.action in {"medal_view", "medal_refresh"}:
         return await _handle_medal(matcher, command)
-    if command.action in {"bind", "accounts", "account_base", "account_investment", "primary", "unbind", "attendance", "gacha", "gacha_history", "gacha_sync", "gacha_import", "medal_missing"}:
+    if command.action in {"bind", "accounts", "account_base", "account_investment", "currency_log", "primary", "unbind", "attendance", "gacha", "gacha_history", "gacha_sync", "gacha_import", "medal_missing"}:
         return await _handle_personal_command(matcher, event, command)
     if command.action == "loadout":
         return await _handle_loadout(matcher, command)
@@ -477,6 +486,9 @@ async def _handle_personal_command(matcher, event: Event, command: ParsedEndfiel
         if command.action == "account_investment":
             cipher = CredentialCipher.from_env()
             return await _handle_account_investment(matcher, qq_user_id, command, cipher, group=is_group(event))
+        if command.action == "currency_log":
+            cipher = CredentialCipher.from_env()
+            return await _handle_account_currency(matcher, qq_user_id, command, cipher, group=is_group(event))
         if command.action == "primary":
             role = account_store.set_primary(qq_user_id, command.account_selector)
             return await matcher.finish(
@@ -841,6 +853,127 @@ async def _render_account_investment(
         name_map=name_map,
     )
     return await _finish_pngs(matcher, await draw_account_investment_cards(view))
+
+
+async def _handle_account_currency(
+    matcher,
+    qq_user_id: str,
+    command: ParsedEndfieldCommand,
+    cipher: CredentialCipher,
+    *,
+    group: bool,
+) -> None:
+    roles = account_store.list_roles(qq_user_id)
+    if not roles:
+        return await matcher.finish("尚未绑定终末地账号。请先私聊使用 /zmd 绑定。")
+    if command.account_selector:
+        role = account_store.resolve_role(qq_user_id, command.account_selector)
+        if role is None:
+            return await matcher.finish("未找到对应账号，请使用 /zmd 账号 查看编号。")
+        return await _render_account_currency(matcher, role, command, cipher, group=group)
+    if len(roles) == 1:
+        return await _render_account_currency(matcher, roles[0], command, cipher, group=group)
+
+    answer = await prompt_silently(
+        _format_accounts(roles, reveal_uid=not group, detail_hint=True), timeout=60
+    )
+    if answer is None:
+        return await matcher.finish()
+    text = answer.extract_plain_text() if hasattr(answer, "extract_plain_text") else str(answer or "")
+    text = text.strip()
+    if not text or text.casefold() in {"取消", "cancel", "q", "quit"}:
+        return await matcher.finish("已取消资源流水查询。")
+    selection = parse_candidate_selection(text, len(roles))
+    role = roles[selection] if selection is not None else account_store.resolve_role(qq_user_id, text)
+    if role is None:
+        return await matcher.finish(f"编号无效，请输入 1-{len(roles)}。")
+    return await _render_account_currency(matcher, role, command, cipher, group=group)
+
+
+async def _render_account_currency(
+    matcher,
+    role: EndfieldRole,
+    command: ParsedEndfieldCommand,
+    cipher: CredentialCipher,
+    *,
+    group: bool,
+) -> None:
+    token = account_store.decrypt_token(role, cipher)
+    provider, _raw_token = decode_account_credential(token)
+    if provider == ACCOUNT_PROVIDER_SKPORT or is_asia_role(role):
+        return await matcher.finish("资源流水查询目前仅支持国服账号，亚服暂不支持。")
+
+    try:
+        start, end = resolve_query_dates(
+            command.start_date,
+            command.end_date,
+            days=command.days or None,
+        )
+        period_label = "ALL HISTORY" if command.all_history else f"{start.isoformat()} ~ {end.isoformat()}"
+        display_start_ts, display_end_ts = (
+            (None, None)
+            if command.all_history
+            else currency_date_bounds(start, end)
+        )
+    except ValueError as exc:
+        return await matcher.finish(str(exc))
+
+    currency_types = command.currency_types or CURRENCY_TYPES
+    # Every query refreshes the complete official history for all resources.
+    # The local table is an incremental, seqId-keyed backup; display filters
+    # are applied only after the refresh has been persisted.
+    fetched_logs = await official_client.currency_logs(
+        token,
+        role,
+        currency_types=CURRENCY_TYPES,
+        start_ts=None,
+        end_ts=None,
+        change_type=0,
+    )
+    backed_up = sum(
+        account_store.upsert_currency_logs(role, items)
+        for items in fetched_logs.values()
+    )
+    logger.info(
+        f"[endfield] currency log backup role={role.masked_uid} fetched={backed_up}"
+    )
+    logs = account_store.list_currency_logs(
+        role,
+        currency_types,
+        start_ts=display_start_ts,
+        end_ts=display_end_ts,
+        change_type=command.change_type,
+    )
+    summaries = tuple(
+        aggregate_currency_logs(logs.get(currency_type, ()), currency_type)
+        for currency_type in currency_types
+    )
+    role_uid = role.masked_uid if group else role.role_id
+    role_label = f"{role.nickname} / CN / UID {role_uid}"
+    try:
+        cards = await draw_currency_log_cards(
+            summaries,
+            role_label=role_label,
+            start=start,
+            end=end,
+            change_type=command.change_type,
+            period_label=period_label,
+        )
+        return await _finish_pngs(matcher, cards)
+    except Exception:
+        logger.exception("[endfield] currency log card render failed")
+        report = format_currency_log_report(
+            summaries,
+            role_label=role_label,
+            start=start,
+            end=end,
+            change_type=command.change_type,
+            period_label=period_label,
+        )
+        chunks = split_report(report)
+        for chunk in chunks[:-1]:
+            await matcher.send(chunk)
+        return await matcher.finish(chunks[-1])
 
 
 async def _handle_account_base(

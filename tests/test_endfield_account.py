@@ -109,6 +109,30 @@ class EndfieldPersonalCommandTests(unittest.TestCase):
             (date(2026, 8, 25), date(2026, 8, 31)),
         )
 
+    def test_all_history_period_label_uses_earliest_backed_up_record(self):
+        earliest, _ = currency_module.date_bounds(date(2026, 5, 14), date(2026, 5, 14))
+        later, _ = currency_module.date_bounds(date(2026, 8, 13), date(2026, 8, 13))
+        records = (
+            client_module.CurrencyLogItem(1, 1, "13", 100, 200, later, 2),
+            client_module.CurrencyLogItem(1, 2, "10", 20, 180, earliest, 1),
+        )
+
+        self.assertEqual(
+            currency_module.format_all_history_period_label(
+                records,
+                end=date(2026, 8, 13),
+            ),
+            "2026/05/14-如今",
+        )
+        self.assertIn(
+            "武库配额最早：2026/07/16；接口约30天，更早仅限本地备份",
+            currency_module.format_all_history_period_label(
+                records,
+                end=date(2026, 8, 13),
+                quota_start=date(2026, 7, 16),
+            ),
+        )
+
     def test_rejects_invalid_currency_log_options(self):
         self.assertTrue(commands_module.parse_command("流水 --资源").error)
         self.assertTrue(commands_module.parse_command("流水 2026-99-99").error)

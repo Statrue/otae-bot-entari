@@ -39,7 +39,9 @@ from .account_i18n import server_label
 from .account_currency import (
     aggregate_currency_logs,
     date_bounds as currency_date_bounds,
+    earliest_currency_log_date,
     format_currency_log_report,
+    format_all_history_period_label,
     resolve_query_dates,
     split_report,
 )
@@ -909,7 +911,6 @@ async def _render_account_currency(
             command.end_date,
             days=command.days or None,
         )
-        period_label = "ALL HISTORY" if command.all_history else f"{start.isoformat()} ~ {end.isoformat()}"
         display_start_ts, display_end_ts = (
             (None, None)
             if command.all_history
@@ -937,6 +938,21 @@ async def _render_account_currency(
     logger.info(
         f"[endfield] currency log backup role={role.masked_uid} fetched={backed_up}"
     )
+    if command.all_history:
+        backed_up_logs = account_store.list_currency_logs(
+            role,
+            currency_types,
+            start_ts=None,
+            end_ts=None,
+            change_type=0,
+        )
+        period_label = format_all_history_period_label(
+            (item for items in backed_up_logs.values() for item in items),
+            end=end,
+            quota_start=earliest_currency_log_date(backed_up_logs.get(3, ())),
+        )
+    else:
+        period_label = f"{start.isoformat()} ~ {end.isoformat()}"
     logs = account_store.list_currency_logs(
         role,
         currency_types,

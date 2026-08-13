@@ -174,6 +174,23 @@ def date_bounds(start: date, end: date) -> tuple[int, int]:
     return int(start_dt.timestamp()), int(end_dt.timestamp())
 
 
+def earliest_currency_log_date(items: Iterable[CurrencyLogItem]) -> date | None:
+    timestamps = [int(item.change_time) for item in items if int(item.change_time) > 0]
+    if not timestamps:
+        return None
+    return datetime.fromtimestamp(min(timestamps), tz=TIMEZONE).date()
+
+
+def format_all_history_period_label(
+    items: Iterable[CurrencyLogItem], *, end: date, quota_start: date | None = None
+) -> str:
+    start = earliest_currency_log_date(items) or end
+    label = f"{start:%Y/%m/%d}-如今"
+    if quota_start is not None:
+        label += f"（武库配额最早：{quota_start:%Y/%m/%d}；接口约30天，更早仅限本地备份）"
+    return label
+
+
 def resolve_query_dates(
     start_text: str = "",
     end_text: str = "",

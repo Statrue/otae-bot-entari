@@ -30,6 +30,9 @@ CURRENCY_LOG_PATH = "/api/center/open/v1/endfield/game_logs/currency"
 CURRENCY_TYPES = (1, 2, 3)
 SKLAND_APP_CODE = "4ca99fa6b56cc2ba"
 GACHA_APP_CODE = "be36d44aa36bfb5b"
+SKLAND_REFRESH_USER_AGENT = (
+    "Skland/1.21.0 (com.hypergryph.skland; build:102100065; iOS 17.6.0) Alamofire/5.7.1"
+)
 ACCOUNT_PROVIDER_CN = "hypergryph"
 ACCOUNT_PROVIDER_SKPORT = "gryphline"
 _ACCOUNT_CREDENTIAL_KIND = "endfield-account-v1"
@@ -667,7 +670,14 @@ class EndfieldOfficialClient:
             if not cred:
                 raise EndfieldAPIError("获取社区凭据", message="官方接口未返回 cred")
         refresh_payload = await self._json_request(
-            "刷新社区签名", "GET", f"{config.community_base}/web/v1/auth/refresh", headers={"cred": cred}
+            "刷新社区签名",
+            "GET",
+            f"{config.community_base}/web/v1/auth/refresh",
+            headers={
+                "cred": cred,
+                "Content-Type": "application/json",
+                "User-Agent": SKLAND_REFRESH_USER_AGENT,
+            },
         )
         data = refresh_payload.get("data") or {}
         sign_token = str(data.get("token") or data.get("salt") or "")

@@ -42,6 +42,9 @@ class EndfieldAccountDetailNameTests(unittest.TestCase):
                 "6": "物品中文武器",
                 "7": "基建技能",
                 "8": "进驻制造舱时，舱室内干员心情消耗降低 8%",
+                "9": "武陵",
+                "10": "天王坪援建点",
+                "11": "制造舱",
             },
             spaceship_skill_table={
                 "spaceship_skill_chr_1_1_1": {
@@ -49,6 +52,21 @@ class EndfieldAccountDetailNameTests(unittest.TestCase):
                     "name": {"id": 7, "text": ""},
                     "desc": {"id": 8, "text": ""},
                 }
+            },
+            domain_table={
+                "domain_2": {
+                    "domainId": "domain_2",
+                    "domainName": {"id": 9, "text": ""},
+                }
+            },
+            settlement_table={
+                "stm_hongs_1": {
+                    "settlementId": "stm_hongs_1",
+                    "settlementName": {"id": 10, "text": ""},
+                }
+            },
+            spaceship_room_type_table={
+                "1": {"type": 1, "name": {"id": 11, "text": ""}}
             },
             version="test-version",
         )
@@ -65,6 +83,13 @@ class EndfieldAccountDetailNameTests(unittest.TestCase):
             self.name_map.spaceship_skill_descriptions["spaceship_skill_chr_1_1_1"],
             "进驻制造舱时，舱室内干员心情消耗降低 8%",
         )
+        self.assertEqual(self.name_map.domain_names["domain_2"], "武陵")
+        self.assertEqual(self.name_map.settlement_names["stm_hongs_1"], "天王坪援建点")
+        self.assertEqual(
+            self.name_map.settlement_names[md5(b"stm_hongs_1").hexdigest()],
+            "天王坪援建点",
+        )
+        self.assertEqual(self.name_map.spaceship_room_names["1"], "制造舱")
 
     def test_resolves_object_shaped_i18n_values(self):
         name_map = build_account_detail_name_map(

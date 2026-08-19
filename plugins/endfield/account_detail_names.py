@@ -23,6 +23,9 @@ class AccountDetailNameMap:
     suit_names: Mapping[str, str] = field(default_factory=dict)
     spaceship_skill_names: Mapping[str, str] = field(default_factory=dict)
     spaceship_skill_descriptions: Mapping[str, str] = field(default_factory=dict)
+    domain_names: Mapping[str, str] = field(default_factory=dict)
+    settlement_names: Mapping[str, str] = field(default_factory=dict)
+    spaceship_room_names: Mapping[str, str] = field(default_factory=dict)
     version: str = ""
 
 
@@ -68,6 +71,9 @@ async def fetch_account_detail_name_map() -> AccountDetailNameMap:
             _get(f"/{table_cfg}/ItemTable.json", max_bytes=_TABLE_MAX_BYTES),
             _get(f"/{table_cfg}/EquipSuitTable.json", max_bytes=_TABLE_MAX_BYTES),
             _get(f"/{table_cfg}/SpaceshipSkillTable.json", max_bytes=_TABLE_MAX_BYTES),
+            _get(f"/{table_cfg}/DomainDataTable.json", max_bytes=_TABLE_MAX_BYTES),
+            _get(f"/{table_cfg}/SettlementBasicDataTable.json", max_bytes=_TABLE_MAX_BYTES),
+            _get(f"/{table_cfg}/SpaceshipRoomTypeTable.json", max_bytes=_TABLE_MAX_BYTES),
             _get(f"/{table_cfg}/I18nTextTable_CN.json", max_bytes=64 * 1024 * 1024),
             return_exceptions=True,
         )
@@ -78,6 +84,9 @@ async def fetch_account_detail_name_map() -> AccountDetailNameMap:
             item_table,
             suit_table,
             spaceship_skill_table,
+            domain_table,
+            settlement_table,
+            spaceship_room_type_table,
             i18n,
         ) = values
         for value in (character_table, growth_table, weapon_table, item_table, suit_table, i18n):
@@ -87,6 +96,12 @@ async def fetch_account_detail_name_map() -> AccountDetailNameMap:
             # Older revisions may not publish this optional table. The other
             # account pages can still use the character/item/i18n tables.
             spaceship_skill_table = {}
+        if isinstance(domain_table, Exception):
+            domain_table = {}
+        if isinstance(settlement_table, Exception):
+            settlement_table = {}
+        if isinstance(spaceship_room_type_table, Exception):
+            spaceship_room_type_table = {}
         _name_map_cache = build_account_detail_name_map(
             character_table,
             growth_table,
@@ -95,6 +110,9 @@ async def fetch_account_detail_name_map() -> AccountDetailNameMap:
             suit_table,
             i18n,
             spaceship_skill_table=spaceship_skill_table,
+            domain_table=domain_table,
+            settlement_table=settlement_table,
+            spaceship_room_type_table=spaceship_room_type_table,
             version=latest,
         )
         return _name_map_cache
@@ -109,6 +127,9 @@ def build_account_detail_name_map(
     i18n: Any,
     *,
     spaceship_skill_table: Any = None,
+    domain_table: Any = None,
+    settlement_table: Any = None,
+    spaceship_room_type_table: Any = None,
     version: str = "",
 ) -> AccountDetailNameMap:
     """Build an account-detail name map from AKEData table payloads."""
@@ -120,6 +141,9 @@ def build_account_detail_name_map(
     suit_names: dict[str, str] = {}
     spaceship_skill_names: dict[str, str] = {}
     spaceship_skill_descriptions: dict[str, str] = {}
+    domain_names: dict[str, str] = {}
+    settlement_names: dict[str, str] = {}
+    spaceship_room_names: dict[str, str] = {}
 
     item_rows = _rows(item_table)
     for key, row in item_rows:
@@ -174,6 +198,22 @@ def build_account_detail_name_map(
             _i18n_text(translations, row.get("desc")),
         )
 
+    for key, row in _rows(domain_table):
+        domain_id = _field_text(row.get("domainId")) or key
+        _put(domain_names, domain_id, _i18n_text(translations, row.get("domainName")))
+
+    for key, row in _rows(settlement_table):
+        settlement_id = _field_text(row.get("settlementId")) or key
+        _put(
+            settlement_names,
+            settlement_id,
+            _i18n_text(translations, row.get("settlementName")),
+        )
+
+    for key, row in _rows(spaceship_room_type_table):
+        room_type = _field_text(row.get("type")) or key
+        _put(spaceship_room_names, room_type, _i18n_text(translations, row.get("name")))
+
     return AccountDetailNameMap(
         character_names=character_names,
         weapon_names=weapon_names,
@@ -182,6 +222,9 @@ def build_account_detail_name_map(
         suit_names=suit_names,
         spaceship_skill_names=spaceship_skill_names,
         spaceship_skill_descriptions=spaceship_skill_descriptions,
+        domain_names=domain_names,
+        settlement_names=settlement_names,
+        spaceship_room_names=spaceship_room_names,
         version=version,
     )
 

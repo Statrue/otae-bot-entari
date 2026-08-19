@@ -638,12 +638,18 @@ class EndfieldAccountBaseViewTests(unittest.TestCase):
                 "spaceship_skill_test_2_2": "进驻制造舱时，舱室内干员心情消耗降低 8%",
                 "spaceship_skill_control_1_2": "进驻总控中枢时，所有干员心情恢复提升 12%",
             },
+            domain_names={"domain_2": "本地化地区"},
+            settlement_names={"stm-test": "本地化据点"},
+            spaceship_room_names={"0": "本地化中枢", "1": "本地化制造舱"},
         )
 
         view = self.build(name_map=names)
         worker = view.rooms[1].operators[0]
         control = view.rooms[0].operators[0]
 
+        self.assertEqual(view.regions[0].name, "本地化地区")
+        self.assertEqual(view.regions[0].settlements[0].name, "本地化据点")
+        self.assertEqual([room.name for room in view.rooms], ["本地化中枢", "本地化制造舱 I"])
         self.assertEqual(worker.name, "本地化干员")
         self.assertEqual(worker.skills[0].name, "本地化制造技能")
         self.assertEqual(worker.skills[0].description, "进驻制造舱时，舱室内干员心情消耗降低 8%")

@@ -99,7 +99,11 @@ def build_account_base_view(
             settlements.append(
                 SettlementView(
                     settlement_id=settlement_id,
-                    name=_text(settlement.get("name")) or settlement_id,
+                    name=_mapped_text(
+                        names.settlement_names,
+                        settlement_id,
+                        settlement.get("name"),
+                    ) or settlement_id,
                     level=level,
                     current_money=current_money,
                     money_max=money_max,
@@ -112,7 +116,11 @@ def build_account_base_view(
         if settlements:
             regions.append(
                 SettlementRegionView(
-                    name=_text(region.get("name")) or "未知地区",
+                    name=_mapped_text(
+                        names.domain_names,
+                        region.get("domainId"),
+                        region.get("name"),
+                    ) or "未知地区",
                     region_id=_text(region.get("domainId")),
                     settlements=tuple(settlements),
                 )
@@ -125,7 +133,7 @@ def build_account_base_view(
             now=current_ts,
         )
 
-    rooms = _build_rooms(detail, characters)
+    rooms = _build_rooms(detail, characters, names)
     return AccountBaseView(
         nickname=_text(base.get("name")) or nickname or "未知管理员",
         uid=str(uid or "--"),
@@ -207,6 +215,7 @@ def estimate_settlement_rate(
 def _build_rooms(
     detail: Mapping[str, Any],
     characters: Mapping[str, Mapping[str, str]],
+    name_map: AccountDetailNameMap,
 ) -> tuple[SpaceshipRoomView, ...]:
     raw_rooms = [
         _mapping(item)
@@ -224,7 +233,7 @@ def _build_rooms(
             continue
         number = occurrence.get(room_type, 0)
         occurrence[room_type] = number + 1
-        name = _room_name(room_type, number)
+        name = _room_name(room_type, number, name_map.spaceship_room_names)
         prepared.append((_ROOM_ORDER.get(room_type, 99), source_index, room, name))
     prepared.sort(key=lambda item: (item[0], item[1]))
 
@@ -234,7 +243,7 @@ def _build_rooms(
         room_type = _int_or_none(room.get("type"))
         room_type = -1 if room_type is None else room_type
         entries = [_mapping(item) for item in _sequence(room.get("chars"))]
-        drain_reduction = _room_drain_reduction(name, entries, characters)
+        drain_reduction = _room_drain_reduction(room_type, entries, characters)
         drain = BASE_DRAIN_PERCENT_PER_HOUR * max(0.0, 1.0 - drain_reduction)
         recovery = BASE_RECOVERY_PERCENT_PER_HOUR * (1.0 + recovery_bonus)
         operators = tuple(
@@ -288,8 +297,8 @@ def _global_recovery_bonus(
     characters: Mapping[str, Mapping[str, str]],
 ) -> float:
     total = 0.0
-    for _, _, room, name in prepared_rooms:
-        if name != "总控中枢":
+    for _, _, room, _name in prepared_rooms:
+        if _int_or_none(room.get("type")) != 0:
             continue
         for entry in _sequence(room.get("chars")):
             character = characters.get(_text(_mapping(entry).get("charId")), {})
@@ -302,18 +311,18 @@ def _global_recovery_bonus(
 
 
 def _room_drain_reduction(
-    room_name: str,
+    room_type: int,
     entries: Sequence[Mapping[str, Any]],
     characters: Mapping[str, Mapping[str, str]],
 ) -> float:
-    room_keyword = next((name for name in _ROOM_NAMES.values() if room_name.startswith(name)), room_name)
+    room_keyword = _ROOM_NAMES.get(room_type, "")
     total = 0.0
     for entry in entries:
         character = characters.get(_text(entry.get("charId")), {})
         for skill in character.get("skills", ()):
             description = _text(_mapping(skill).get("description"))
             match = _MOOD_REDUCTION_RE.search(description)
-            if match and room_keyword in description:
+            if match and room_keyword and room_keyword in description:
                 total += float(match.group(1)) / 100.0
     return total
 
@@ -390,9 +399,13 @@ def _spaceship_skill_char_id(skill_id: str) -> str:
     return match.group(1) if match else ""
 
 
-def _room_name(room_type: int, occurrence: int) -> str:
-    base = _ROOM_NAMES.get(room_type)
-    if base is None:
+def _room_name(
+    room_type: int,
+    occurrence: int,
+    localized_names: Mapping[str, str] | None = None,
+) -> str:
+    base = _mapped_text(localized_names or {}, str(room_type), _ROOM_NAMES.get(room_type))
+    if not base:
         return f"舱室 {room_type}" if room_type >= 0 else "未知舱室"
     if room_type != 1:
         return base

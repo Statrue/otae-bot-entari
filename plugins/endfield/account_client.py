@@ -636,6 +636,8 @@ class EndfieldOfficialClient:
         if cached and not refresh and cached.expires_at > time.monotonic():
             return cached
         cred = ""
+        sign_token = ""
+        server_time = 0
         oauth_code = await self._oauth_token(
             account_token, config.community_app_code, grant_type=0, field="code"
         )
@@ -666,28 +668,33 @@ class EndfieldOfficialClient:
                 # cred when the credential-exchange route is unavailable.
                 cred = oauth_code
         if not cred:
-            cred = str((credential_payload.get("data") or {}).get("cred") or "")
+            credential_data = credential_payload.get("data") or {}
+            cred = str(credential_data.get("cred") or "")
             if not cred:
                 raise EndfieldAPIError("获取社区凭据", message="官方接口未返回 cred")
-        refresh_payload = await self._json_request(
-            "刷新社区签名",
-            "GET",
-            f"{config.community_base}/web/v1/auth/refresh",
-            headers={
-                "cred": cred,
-                "Content-Type": "application/json",
-                "User-Agent": SKLAND_REFRESH_USER_AGENT,
-            },
-        )
-        data = refresh_payload.get("data") or {}
-        sign_token = str(data.get("token") or data.get("salt") or "")
+            sign_token = str(credential_data.get("token") or credential_data.get("salt") or "")
+            server_time = _as_int(credential_payload.get("timestamp"))
         if not sign_token:
-            raise EndfieldAPIError("刷新社区签名", message="官方接口未返回签名凭据")
+            refresh_payload = await self._json_request(
+                "刷新社区签名",
+                "GET",
+                f"{config.community_base}/web/v1/auth/refresh",
+                headers={
+                    "cred": cred,
+                    "Content-Type": "application/json",
+                    "User-Agent": SKLAND_REFRESH_USER_AGENT,
+                },
+            )
+            data = refresh_payload.get("data") or {}
+            sign_token = str(data.get("token") or data.get("salt") or "")
+            if not sign_token:
+                raise EndfieldAPIError("刷新社区签名", message="官方接口未返回签名凭据")
+            server_time = _as_int(refresh_payload.get("timestamp"))
         now = int(time.time())
         context = _SklandContext(
             cred=cred,
             sign_token=sign_token,
-            server_time=_as_int(refresh_payload.get("timestamp") or now),
+            server_time=server_time or now,
             client_time=now,
             expires_at=time.monotonic() + 540,
             provider=provider,

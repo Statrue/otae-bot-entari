@@ -1293,7 +1293,7 @@ class EndfieldOfficialClientTests(unittest.IsolatedAsyncioTestCase):
         roles = client_module._extract_gacha_binding_roles(payload)
         self.assertEqual([(item.binding_uid, item.role_id) for item in roles], [("binding-uid", "role-a"), ("binding-uid", "role-b")])
 
-    async def test_cn_skland_refresh_identifies_as_official_client(self):
+    async def test_cn_skland_context_uses_generated_sign_token_without_refresh(self):
         async def handler(request: httpx.Request):
             if request.url.host == "as.hypergryph.com":
                 return httpx.Response(200, json={
@@ -1301,20 +1301,13 @@ class EndfieldOfficialClientTests(unittest.IsolatedAsyncioTestCase):
                     "data": {"code": "oauth-code"},
                 })
             if request.url.path == "/api/v1/user/auth/generate_cred_by_code":
-                return httpx.Response(200, json={"code": 0, "data": {"cred": "cred"}})
-            if request.url.path == "/web/v1/auth/refresh":
-                self.assertEqual(request.url.host, "zonai.skland.com")
-                self.assertEqual(request.headers["cred"], "cred")
-                self.assertEqual(
-                    request.headers["user-agent"],
-                    client_module.SKLAND_REFRESH_USER_AGENT,
-                )
-                self.assertEqual(request.headers["content-type"], "application/json")
                 return httpx.Response(200, json={
                     "code": 0,
                     "timestamp": 1000,
-                    "data": {"token": "sign-token"},
+                    "data": {"cred": "cred", "token": "sign-token"},
                 })
+            if request.url.path == "/web/v1/auth/refresh":
+                raise AssertionError("generated sign token should avoid refresh")
             raise AssertionError(str(request.url))
 
         http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -1322,7 +1315,10 @@ class EndfieldOfficialClientTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(client_module.time, "time", return_value=1000):
             context = await client._skland_context("account-token")
 
-        self.assertEqual((context.cred, context.sign_token), ("cred", "sign-token"))
+        self.assertEqual(
+            (context.cred, context.sign_token, context.server_time),
+            ("cred", "sign-token", 1000),
+        )
         await http.aclose()
 
     async def test_skport_role_discovery_uses_global_account_and_community_hosts(self):

@@ -2,7 +2,9 @@
 
 独立脚本：`scripts/query_skland_endfield.py`。
 
-脚本复用现有 `.runtime/skland_reverse/session_sensitive.json`，自动刷新签名上下文，查询终末地个人详情、危机合约和影拓丰碑，并生成原始 JSON、脱敏 JSON 与 Markdown 摘要。
+脚本复用现有 `.runtime/skland_reverse/session_sensitive.json`，自动刷新签名上下文，查询终末地个人详情、战争回响、危机合约和影拓丰碑，并生成原始 JSON、脱敏 JSON 与 Markdown 摘要。
+
+2026-08-19 使用森空岛 `1.62.0` MuMu 当前登录态复查后，会话文件除 `cred` 外还需要保存与其匹配的完整 `dId`。本次 App 登录态对应的 `dId` 来源是 WebView 的 `smidV2` Cookie；它与 `cred` 同属敏感会话材料，不得写入命令行、日志、Git 或公开摘要。旧会话若不要求设备绑定，`dId` 可以为空；不要把两种会话混用。
 
 ## 通过昵称定位内部用户 ID
 
@@ -47,11 +49,24 @@ python scripts\query_skland_endfield.py `
 
 危机合约与影拓丰碑接口也返回 `code: 0`，但当前业务字段分别为 `crisisContract: null` 和 `indieHard: null`。这表示接口和账号定位均正常，只是当前没有可公开展示的记录，或对应展示配置尚未开启。
 
+## 当前账号战争回响复查（2026-08-19）
+
+独立详情接口：
+
+```http
+GET /api/v1/game/endfield/card/war-echoes?roleId=<ROLE_ID>&serverId=<SERVER_ID>
+```
+
+当前账号实测返回 `code: 0`，`data.warEchoes` 含 2 个赛季、5 个轮换、15 个关卡轮换项、45 个普通/困难/残酷难度对象和 8 条荣誉记录。当前可见赛季为“谵妄赛季”和“追忆赛季”，两季账号汇总均为 9 星且 `allPlusTasks: true`。
+
+完整响应与脱敏副本保存在 `.runtime/skland_reverse/responses/`；正式文档只记录字段结构和聚合结论，不公开角色 UID、内部用户 ID、`cred`、`dId`、签名 token 或请求头。
+
 ## 输出
 
 ```text
 .runtime/skland_reverse/responses/public_<label>_binding_sensitive.json
 .runtime/skland_reverse/responses/public_<label>_detail_sensitive.json
+.runtime/skland_reverse/responses/public_<label>_war_echoes_sensitive.json
 .runtime/skland_reverse/responses/public_<label>_crisis_contract_sensitive.json
 .runtime/skland_reverse/responses/public_<label>_indie_hard_sensitive.json
 .runtime/skland_reverse/responses/redacted_public_<label>_*.json

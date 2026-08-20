@@ -1,8 +1,10 @@
 # 森空岛「明日方舟：终末地」个人数据接口
 
-> 逆向与本机复现日期：2026-07-11；合约记录详情补充实测：2026-07-15  
-> 森空岛 App：`com.hypergryph.skland` `1.57.0`  
-> 结论：验证码登录、OAuth 授权、`cred` 换取、签名刷新、角色绑定查询、终末地个人详情查询均已返回 `code: 0`。
+> 初次逆向与本机复现：2026-07-11；合约记录详情补充实测：2026-07-15；战争回响与 `dId` 复查：2026-08-19
+>
+> 森空岛 App：初次 `1.57.0`；本次 MuMu 实测 `com.hypergryph.skland` `1.62.0`（`versionCode=106200040`）
+>
+> 结论：验证码登录、OAuth 授权、`cred` 换取、签名刷新、角色绑定、个人详情、战争回响、危机合约与影拓丰碑查询均已有 `code: 0` 实测。
 
 ## 1. 结论摘要
 
@@ -10,6 +12,12 @@
 
 ```http
 GET https://zonai.skland.com/api/v1/game/endfield/card/detail?roleId=<ROLE_ID>&serverId=<SERVER_ID>
+```
+
+战争回响详情接口：
+
+```http
+GET https://zonai.skland.com/api/v1/game/endfield/card/war-echoes?roleId=<ROLE_ID>&serverId=<SERVER_ID>
 ```
 
 必要认证头：
@@ -22,7 +30,12 @@ vName: 1.0.0
 sign: <DYNAMIC_MD5_SIGNATURE>
 ```
 
-`dId` 可作为数美设备 ID 发送；本机实测在请求头省略 `dId`、但签名对象中保留 `"dId":""` 时请求成功。
+`dId` 是否可省略取决于凭据的生成/保存链路：
+
+- 2026-07 的验证码换凭据样本可省略请求头 `dId`，签名对象保留 `"dId":""` 即成功。
+- 2026-08-19 从森空岛 `1.62.0` MuMu 当前登录态提取的 `cred`，必须把 WebView 的完整 `smidV2` Cookie 值作为 `dId` 同时放入请求头和签名对象；省略或只取前/后 32 位都会返回 `code: 10001, message: 设备信息无效`。
+
+因此实现应把 `cred` 与对应 `dId` 作为同一份敏感会话保存，不能默认所有凭据都使用空 `dId`。两者均不得写入日志、Git 或 Bot 对外消息。
 
 主接口响应数据位于：
 
@@ -45,6 +58,7 @@ data.detail
 | 刷新签名 | `GET https://zonai.skland.com/web/v1/auth/refresh` | 获取当前签名 token 和服务器时间 |
 | 查询绑定 | `GET https://zonai.skland.com/api/v1/game/player/binding` | 获取 `roleId`、`serverId` |
 | 查询详情 | `GET https://zonai.skland.com/api/v1/game/endfield/card/detail` | 获取完整个人数据 |
+| 查询战争回响 | `GET https://zonai.skland.com/api/v1/game/endfield/card/war-echoes` | 获取赛季、轮换、三档关卡、最佳记录、敌人与荣誉记录 |
 | 查询危机合约 | `GET https://zonai.skland.com/api/v1/game/endfield/card/crisis-contract` | 获取活动状态、历史与最佳记录 ID |
 | 查询合约记录详情 | `GET https://zonai.skland.com/api/v1/game/endfield/card/crisis-contract/record` | 用 `recordId` 获取当次武器、词条等级和装备快照 |
 | 查询影拓丰碑 | `GET https://zonai.skland.com/api/v1/game/endfield/card/indie-hard` | 获取主题、关卡与最佳记录 |
@@ -75,6 +89,14 @@ POST /api/v1/gameplat/game/refresh
 ```http
 GET /api/v1/game/endfield/card/crisis-contract/record?roleId=<ROLE_ID>&serverId=<SERVER_ID>&recordId=<BEST_RECORD_ID>
 ```
+
+战争回响可选参数：
+
+```http
+GET /api/v1/game/endfield/card/war-echoes?roleId=<ROLE_ID>&serverId=<SERVER_ID>&seasonId=<SEASON_ID>
+```
+
+不传 `seasonId` 返回全部可见赛季；H5 在详情页会先带 `seasonId` 请求当前赛季，再发一次不带 `seasonId` 的请求补齐赛季列表。查询其他用户时与 `card/detail` 相同，可追加 `userId=<SKLAND_USER_ID>`。
 
 `recordDetail.chars[]` 会返回记录当时的 `weapon.icon`、`weapon.level`、`weapon.weaponTerms[3]`、`equips` 四槽、`level`、`potentialLevel` 和 `avatarUrl`。列表接口中的 `bestRecord.chars[]` 只有角色 ID、等级、潜能和头像，不能用于还原历史配装。
 
@@ -161,6 +183,7 @@ timestamp
 ```http
 GET https://zonai.skland.com/web/v1/auth/refresh
 cred: <REDACTED>
+dId: <MATCHING_DEVICE_ID_IF_REQUIRED>
 ```
 
 该接口不需要 `sign`。成功响应包含：
@@ -219,7 +242,7 @@ canonical =
 - POST 使用实际发送的原始 JSON body 字符串。
 - query 参数顺序和编码必须与最终 URL 完全一致。
 - JSON 必须紧凑序列化，不能插入空格。
-- 即使请求头未发送 `dId`，签名 JSON 中也要保留 `"dId":""`。
+- 签名 JSON 中始终保留 `dId`；值必须与实际请求头一致。旧凭据可为空，当前 MuMu `1.62.0` 凭据必须使用完整 `smidV2`。
 
 ### 5.2 摘要算法
 
@@ -241,11 +264,11 @@ import hmac
 import json
 
 
-def make_sign(path, method, query, body, timestamp, sign_token):
+def make_sign(path, method, query, body, timestamp, sign_token, d_id=""):
     sign_headers = {
         "platform": "3",
         "timestamp": str(timestamp),
-        "dId": "",
+        "dId": d_id,
         "vName": "1.0.0",
     }
     canonical = (
@@ -421,16 +444,80 @@ wikiItemId
 | `seekSuspicion` | 当前与最大疑点/搜寻进度 |
 | `crisisContract[]` | 危机合约活动、挑战、任务、最高记录、时间范围 |
 
+### 8.4 战争回响 `card/war-echoes`
+
+请求：
+
+```http
+GET /api/v1/game/endfield/card/war-echoes?roleId=<ROLE_ID>&serverId=<SERVER_ID>
+```
+
+成功响应数据位于：
+
+```text
+data.warEchoes
+```
+
+顶层字段：
+
+| 字段 | 含义 |
+|---|---|
+| `seasons[]` | 可见赛季列表 |
+| `achieves[]` | 已形成的关卡荣誉记录 |
+| `activity` | 活动摘要；当前样本只有空 `name`，不可依赖其一定有内容 |
+
+`seasons[]` 每项：
+
+```text
+id
+name
+kvImage
+headerImage
+startTs
+endTs
+stars
+allPlusTasks
+weeks[]
+```
+
+`weeks[]` 每项含 `id/name/startTs/endTs/stars/allPlusTasks/dungeonGroups[]`。`dungeonGroups[]` 每组含 `name/star/plusTask`，以及三档关卡：
+
+```text
+normalDungeon
+hardDungeon
+cruelDungeon
+```
+
+每个关卡对象：
+
+```text
+id
+name
+desc
+feature
+recommendLevel
+plusTask
+additionalChallengeTarget
+isPass
+firstPassTs
+bestRecord
+enemies[]
+```
+
+`bestRecord` 当前实测字段为 `chars[]/ts/passTs`。`chars[]` 含 `charId/level/potentialLevel/avatarUrl/property/rarity/evolvePhase`；`enemies[]` 含 `id/name/desc/level/imageUrl/ability`。`achieves[]` 当前实测字段为 `name/star/firstPassTs`。
+
+`card/detail` 在 `data.detail.warEchoes` 只给首页摘要（当前为 `seasons[]/activity`）；完整轮换、三档关卡、最佳队伍与荣誉必须查询独立 `card/war-echoes`，不要从摘要推断。
+
 ## 9. Bot 接入流程
 
 推荐将认证和业务查询分开：
 
-1. 管理员通过验证码登录一次，安全保存 `cred`。
-2. Bot 每次查询前调用 `/web/v1/auth/refresh`。
+1. 管理员通过验证码登录一次，安全保存 `cred`，并在该凭据要求设备绑定时一并保存匹配的 `dId`。
+2. Bot 每次查询前调用 `/web/v1/auth/refresh`；需要 `dId` 时同步发送。
 3. 保存 `signToken`、`clientTime`、`serverTime` 到内存。
 4. 调 `/api/v1/game/player/binding` 解析 `roleId/serverId`，并设置短期缓存。
 5. 按最终 URL 的 query 顺序生成签名。
-6. 调 `/api/v1/game/endfield/card/detail`。
+6. 调 `/api/v1/game/endfield/card/detail`；需要战争回响详情时再调 `/api/v1/game/endfield/card/war-echoes`。
 7. 将 `data.detail` 转为 Bot 内部模型，不把整个原响应直接发送到群聊。
 
 建议错误处理：
@@ -438,6 +525,7 @@ wikiItemId
 | code / 状态 | 处理方式 |
 |---|---|
 | `0` | 成功 |
+| `10001` | 检查 `cred` 是否需要匹配 `dId`；当前森空岛 `1.62.0` MuMu 会话必须使用完整 `smidV2` |
 | `10003` | 用响应 `timestamp` 重新校时并重试一次 |
 | `10000` | 检查 canonical、query 顺序、MD5 二次摘要和 token |
 | HTTP `401` | refresh 并重试；仍失败则要求重新登录 |
@@ -452,6 +540,7 @@ wikiItemId
 .runtime/skland_reverse/responses/binding_sensitive.json
 .runtime/skland_reverse/responses/endfield_detail_sensitive.json
 .runtime/skland_reverse/responses/refresh_sensitive.json
+.runtime/skland_reverse/responses/public_current_self_20260819_war_echoes_sensitive.json
 ```
 
 脱敏文件：
@@ -460,6 +549,7 @@ wikiItemId
 .runtime/skland_reverse/responses/redacted_binding.json
 .runtime/skland_reverse/responses/redacted_endfield_detail.json
 .runtime/skland_reverse/responses/redacted_refresh.json
+.runtime/skland_reverse/responses/redacted_public_current_self_20260819_war_echoes.json
 .runtime/skland_reverse/responses/verification_summary.json
 ```
 

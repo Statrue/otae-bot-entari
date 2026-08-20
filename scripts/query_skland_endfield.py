@@ -20,6 +20,7 @@ from reproduce_endfield import (
 
 ENDPOINTS = {
     "detail": "/api/v1/game/endfield/card/detail",
+    "war_echoes": "/api/v1/game/endfield/card/war-echoes",
     "crisis_contract": "/api/v1/game/endfield/card/crisis-contract",
     "indie_hard": "/api/v1/game/endfield/card/indie-hard",
 }
@@ -100,9 +101,62 @@ def build_markdown(label, role_id, server_id, responses):
         f"- 档案数量：{base.get('docNum', '-')}",
         f"- 查询时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "",
-        "## 危机合约",
+        "## 战争回响",
         "",
     ]
+
+    war_echoes = (responses["war_echoes"].get("data") or {}).get("warEchoes")
+    if war_echoes is None:
+        lines.extend(
+            [
+                "- 接口状态：成功（`code: 0`）",
+                "- 业务字段：`warEchoes: null`",
+                "- 结论：当前没有可展示的战争回响数据，或该展示项尚未开启。",
+            ]
+        )
+    else:
+        achieves = war_echoes.get("achieves") or []
+        lines.append(f"- 荣誉记录：{len(achieves)} 项")
+        for season in war_echoes.get("seasons") or []:
+            lines.extend(
+                [
+                    "",
+                    f"### {season.get('name', '未命名赛季')}",
+                    "",
+                    f"- 赛季星数：{season.get('stars', '-')}；附加目标全完成：{'是' if season.get('allPlusTasks') else '否'}",
+                    f"- 开放时间：{format_time(season.get('startTs'))} 至 {format_time(season.get('endTs'))}",
+                ]
+            )
+            for week in season.get("weeks") or []:
+                lines.append(
+                    f"- **{week.get('name', '未命名轮换')}**：{week.get('stars', '-')} 星；附加目标全完成：{'是' if week.get('allPlusTasks') else '否'}"
+                )
+                for group in week.get("dungeonGroups") or []:
+                    records = []
+                    for key, difficulty in (
+                        ("普通", group.get("normalDungeon")),
+                        ("困难", group.get("hardDungeon")),
+                        ("残酷", group.get("cruelDungeon")),
+                    ):
+                        if not difficulty:
+                            continue
+                        record = difficulty.get("bestRecord") or {}
+                        result = "已通过" if difficulty.get("isPass") else "未通过"
+                        if record:
+                            result += f"，最佳 {format_duration(record.get('passTs'))}"
+                        records.append(f"{key}{result}")
+                    lines.append(
+                        f"  - {group.get('name', '-')}：{group.get('star', '-')} 星；"
+                        + "；".join(records)
+                    )
+
+    lines.extend(
+        [
+            "",
+            "## 危机合约",
+            "",
+        ]
+    )
 
     crisis = (responses["crisis_contract"].get("data") or {}).get("crisisContract")
     if crisis is None:
@@ -170,7 +224,8 @@ def main():
     label = safe_label(args.label)
     session = load_session()
     cred = session["cred"]["data"]["cred"]
-    token, timestamp = refresh_sign_context(cred)
+    d_id = session.get("dId", "")
+    token, timestamp = refresh_sign_context(cred, d_id)
 
     role_id = args.role_id
     server_id = args.server_id
@@ -181,6 +236,7 @@ def main():
             "/api/v1/game/player/binding",
             {"uid": args.user_id},
             timestamp=timestamp,
+            d_id=d_id,
         )
         save_json(RESPONSE_DIR / f"public_{label}_binding_sensitive.json", binding)
         save_json(RESPONSE_DIR / f"redacted_public_{label}_binding.json", redact(binding))
@@ -200,7 +256,9 @@ def main():
 
     responses = {}
     for name, path in ENDPOINTS.items():
-        response, _ = request_json(cred, token, path, params, timestamp=timestamp)
+        response, _ = request_json(
+            cred, token, path, params, timestamp=timestamp, d_id=d_id
+        )
         save_json(RESPONSE_DIR / f"public_{label}_{name}_sensitive.json", response)
         save_json(RESPONSE_DIR / f"redacted_public_{label}_{name}.json", redact(response))
         if response.get("code") != 0:
@@ -221,6 +279,7 @@ def main():
             "/api/v1/game/endfield/card/crisis-contract/record",
             {**params, "recordId": record_id},
             timestamp=timestamp,
+            d_id=d_id,
         )
         save_json(RESPONSE_DIR / f"public_{label}_crisis_record_sensitive.json", record_response)
         save_json(RESPONSE_DIR / f"redacted_public_{label}_crisis_record.json", redact(record_response))

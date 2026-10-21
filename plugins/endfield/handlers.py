@@ -263,6 +263,7 @@ calendar_source = AkeDataVersionCalendarSource(client)
 official_calendar_source = OfficialVersionCalendarSource()
 medal_store = MedalSnapshotStore()
 archive_store = ArchiveSnapshotStore()
+collection_refresher = CollectionSnapshotRefresher(service, medal_store, archive_store)
 random_wiki_service = RandomWikiService(service, stage_service, lambda: archive_store.load_current_view())
 _FORWARD_SENDER_NAME = "Endfield"
 # 抽卡分析：超过 N 张图改为一条合并转发（每节点 1 张）；ENDFIELD_GACHA_FORWARD_ABOVE=0 关闭转发。

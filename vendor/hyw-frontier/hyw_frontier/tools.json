@@ -136,16 +136,16 @@
           "description": "仅控制 TinEye 结果页码，默认 1；只有确认存在下一页时翻页，Yandex 复用任务内原查询缓存"
         }
       },
-      "oneOf": [
+      "anyOf": [
         {
-          "required": [
-            "source_id"
-          ]
+          "type": "object",
+          "required": ["source_id"],
+          "not": {"required": ["url"]}
         },
         {
-          "required": [
-            "url"
-          ]
+          "type": "object",
+          "required": ["url"],
+          "not": {"required": ["source_id"]}
         }
       ],
       "additionalProperties": false
@@ -171,9 +171,17 @@
           "description": "pageshot_attachment 附件像素坐标 [left, top, right, bottom]，右下边界不包含"
         }
       },
-      "oneOf": [
-        {"required": ["url"], "not": {"anyOf": [{"required": ["pageshot_id"]}, {"required": ["bbox"]}]}},
-        {"required": ["pageshot_id", "bbox"], "not": {"required": ["url"]}}
+      "anyOf": [
+        {
+          "type": "object",
+          "required": ["url"],
+          "not": {"anyOf": [{"required": ["pageshot_id"]}, {"required": ["bbox"]}]}
+        },
+        {
+          "type": "object",
+          "required": ["pageshot_id", "bbox"],
+          "not": {"required": ["url"]}
+        }
       ],
       "additionalProperties": false
     }

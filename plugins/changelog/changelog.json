@@ -1,15 +1,52 @@
 {
   "schema": 2,
-  "head": "4674068",
+  "head": "02882c1",
   "generated_from": {
     "first_commit": "8e1b455",
     "first_date": "2026-06-17",
-    "last_date": "2026-10-21",
-    "commit_count": 366,
+    "last_date": "2026-10-23",
+    "commit_count": 369,
     "merge_commit_count": 36,
-    "version_count": 47
+    "version_count": 48
   },
   "releases": [
+    {
+      "version": "v1.34.0",
+      "date": "2026-10-23",
+      "from": "2026-10-21",
+      "to": "2026-10-23",
+      "title": "副本敌人按实际刷出变体计算出生加成",
+      "summary": "终末地关卡卡的敌人数值改按场景里实际刷出的变体计算：变体自带的 AttributeModifiers（出生加成）不再漏乘，同基础怪的多个变体分条展示，生命/攻击/防御有小数时保留两位。顺带修了 hyw 工具互斥参数对象分支以兼容 Grok，并恢复 collection_refresher 实例化。",
+      "tags": [
+        "终末地"
+      ],
+      "highlights": [
+        {
+          "date": "2026-10-23",
+          "kind": "fix",
+          "text": "终末地关卡卡的敌人血量等战斗数值改按场景里实际刷出的变体计算：DungeonTable 里写的是基础怪时，会解析 wave/library 落到的变体行，把变体自带的 AttributeModifiers（出生加成）与刷怪 buff 一并叠乘；同一基础怪刷出多种变体时分条展示；数值有小数时保留两位（例如丰碑 indie_hard032_s 苦难大孽生 生命 2,905,574.76）。",
+          "commits": [
+            "02882c1"
+          ]
+        },
+        {
+          "date": "2026-10-22",
+          "kind": "fix",
+          "text": "恢复终末地 collection_refresher 的实例化，避免收集相关刷新逻辑静默失效。",
+          "commits": [
+            "7a90635"
+          ]
+        },
+        {
+          "date": "2026-10-21",
+          "kind": "fix",
+          "text": "海屿屋（hyw）工具的互斥参数改成对象分支写法，兼容 Grok 对工具 schema 的校验。",
+          "commits": [
+            "aec7374"
+          ]
+        }
+      ]
+    },
     {
       "version": "v1.33.0",
       "date": "2026-10-20",

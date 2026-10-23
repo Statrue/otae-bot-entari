@@ -483,6 +483,50 @@ def test_build_report_routes_terms_to_stage_or_overview(tmp_path):
     assert by_stage.stage_name == "关卡二"
 
 
+def test_overview_keeps_stages_without_records(tmp_path):
+    store = _store(tmp_path)
+    _seed(store)
+    played = ChallengeRecordRow(
+        activity_id="w1",
+        activity_name="异想赛季",
+        scope_id="k1",
+        scope_name="异想轮换Ⅱ",
+        stage_id="d1",
+        stage_name="长刃记录：应龙",
+        difficulty="cruel",
+        passed=True,
+        record_ts=100,
+        pass_time=200,
+        members=(ChallengeRecordMember(0, "b" * 32),),
+    )
+    untouched = ChallengeRecordRow(
+        activity_id="w1",
+        activity_name="异想赛季",
+        scope_id="k1",
+        scope_name="异想轮换Ⅱ",
+        stage_id="d2",
+        stage_name="无声回廊",
+        difficulty="cruel",
+        passed=False,
+    )
+    store.replace_challenge_snapshot(
+        "r1", "1", FAMILY_WAR_ECHO, (played, untouched), fetched_at=1000
+    )
+    service = UsageStatsService(store, client=None)  # type: ignore[arg-type]
+    roles = [_role("r1")]
+    overview = service.build_report("group", roles, FAMILY_WAR_ECHO)
+    assert [stage.stage_id for stage in overview.stages] == ["d1", "d2"]
+    assert overview.stages[0].sample_count == 1
+    assert overview.stages[1].sample_count == 0
+    assert overview.stages[1].insufficient is True
+    single = service.build_report(
+        "group", roles, FAMILY_WAR_ECHO, terms=("无声回廊",)
+    )
+    assert isinstance(single, UsageStageReport)
+    assert single.sample_count == 0
+    assert single.insufficient is True
+
+
 def test_overview_lists_each_stage(tmp_path):
     store = _store(tmp_path)
     _seed(store)

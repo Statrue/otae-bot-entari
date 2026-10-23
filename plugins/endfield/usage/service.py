@@ -918,7 +918,56 @@ class UsageStatsService:
                     members=tuple(sorted((item.slot, item.operator_key) for item in items)),
                 )
             )
-        return aggregates
+        return aggregates + self._stage_placeholders(roles, family, aggregates)
+
+    def _stage_placeholders(
+        self,
+        roles: Sequence[EndfieldRole],
+        family: str,
+        aggregates: Sequence[_RecordAgg],
+    ) -> list[_RecordAgg]:
+        """给"快照里存在但没人通关"的关卡补占位行。
+
+        影拓/回响的一期轮换通常有两三关,官方只给最佳记录,没人打过的那关在
+        成员表里根本不存在。不补占位的话概览卡会只剩一关,看起来像少画了。
+        """
+        keys = {(role.role_id, role.server_id) for role in roles}
+        known = {
+            (item.activity_id, item.scope_id, item.stage_id, item.difficulty)
+            for item in aggregates
+        }
+        placeholders: list[_RecordAgg] = []
+        seen: set[tuple[str, str, str, str]] = set()
+        for row in self.store.list_challenge_stage_rows(family, keys):
+            identity = (
+                row.activity_id,
+                row.scope_id,
+                row.stage_id,
+                row.difficulty,
+            )
+            if identity in known or identity in seen:
+                continue
+            seen.add(identity)
+            placeholders.append(
+                _RecordAgg(
+                    activity_id=row.activity_id,
+                    activity_name=row.activity_name,
+                    scope_id=row.scope_id,
+                    scope_name=row.scope_name,
+                    stage_id=row.stage_id,
+                    stage_name=row.stage_name,
+                    difficulty=row.difficulty,
+                    activity_start_ts=row.activity_start_ts,
+                    activity_end_ts=row.activity_end_ts,
+                    scope_start_ts=row.scope_start_ts,
+                    scope_end_ts=row.scope_end_ts,
+                    record_ts=0,
+                    pass_time=0,
+                    role_keys=frozenset(),
+                    members=(),
+                )
+            )
+        return placeholders
 
     def _snapshot_updated_at(self, roles: Sequence[EndfieldRole], family: str) -> int:
         keys = [(role.role_id, role.server_id) for role in roles]

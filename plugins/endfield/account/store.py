@@ -1935,6 +1935,61 @@ class EndfieldStore:
             if allowed is None or (str(row["role_id"]), str(row["server_id"])) in allowed
         ]
 
+    def list_challenge_stage_rows(
+        self,
+        family: str,
+        role_keys: Iterable[tuple[str, str]] | None = None,
+    ) -> list[ChallengeMemberRow]:
+        """列出快照里出现过的关卡(不要求有最佳记录)。
+
+        聚合只能看到"有人打过"的关卡,轮换里没被通关的关卡会整块消失。
+        这里按写入顺序(即官方响应顺序)给出关卡清单,缺成员的用 slot=-1 占位。
+        """
+        allowed = (
+            None
+            if role_keys is None
+            else {(str(role_id), str(server_id)) for role_id, server_id in role_keys}
+        )
+        if allowed is not None and not allowed:
+            return []
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT role_id, server_id, activity_id, activity_name,
+                       scope_id, scope_name, stage_id, stage_name, difficulty,
+                       activity_start_ts, activity_end_ts,
+                       scope_start_ts, scope_end_ts, passed, record_ts, pass_time
+                FROM challenge_records
+                WHERE family = ?
+                ORDER BY rowid
+                """,
+                (str(family),),
+            ).fetchall()
+        return [
+            ChallengeMemberRow(
+                role_id=str(row["role_id"]),
+                server_id=str(row["server_id"]),
+                activity_id=str(row["activity_id"] or ""),
+                activity_name=str(row["activity_name"] or ""),
+                scope_id=str(row["scope_id"] or ""),
+                scope_name=str(row["scope_name"] or ""),
+                stage_id=str(row["stage_id"] or ""),
+                stage_name=str(row["stage_name"] or ""),
+                difficulty=str(row["difficulty"] or ""),
+                activity_start_ts=int(row["activity_start_ts"] or 0),
+                activity_end_ts=int(row["activity_end_ts"] or 0),
+                scope_start_ts=int(row["scope_start_ts"] or 0),
+                scope_end_ts=int(row["scope_end_ts"] or 0),
+                passed=bool(row["passed"]),
+                record_ts=int(row["record_ts"] or 0),
+                pass_time=int(row["pass_time"] or 0),
+                slot=-1,
+                operator_key="",
+            )
+            for row in rows
+            if allowed is None or (str(row["role_id"]), str(row["server_id"])) in allowed
+        ]
+
     def cleanup_orphan_challenge_snapshots(self) -> int:
         with self._lock:
             cursor = self.conn.execute(

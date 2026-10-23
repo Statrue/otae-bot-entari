@@ -749,33 +749,25 @@ def _enemies(
     buff_table: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[StageEnemy, ...]:
     buff_table = buff_table or {}
-    spawner_configs = _applicable_spawner_configs(spawner_configs, dungeon)
     result: list[StageEnemy] = []
-    levels = dungeon.get("enemyLevels") or ()
-    for index, enemy_id in enumerate(dungeon.get("enemyIds") or ()):
-        enemy_id = str(enemy_id or "")
-        enemy = enemy_table.get(enemy_id)
-        if not enemy_id or not isinstance(enemy, dict):
-            continue
-        template_id = str(enemy.get("templateId") or enemy_id)
+    for spawned in _spawned_enemies(
+        dungeon, enemy_table, spawner_configs, level_script_enemies
+    ):
+        enemy = spawned.row
+        template_id = str(enemy.get("templateId") or spawned.enemy_id)
         display = enemy_display_table.get(template_id)
         display = display if isinstance(display, dict) else {}
         attr_id = str(enemy.get("attrTemplateId") or template_id)
         attributes = enemy_attribute_table.get(attr_id)
         attributes = attributes if isinstance(attributes, dict) else {}
-        level = _optional_int(levels[index]) if index < len(levels) else None
-        library_buffs = _matching_spawner_buffs(spawner_configs, enemy_id, enemy_table)
-        library_buffs += _matching_script_buffs(
-            level_script_enemies, enemy_id, level, enemy_table
-        )
-        modifiers = _enemy_modifiers(enemy, library_buffs, buff_table)
-        hp, attack, defense = _enemy_metrics(attributes, level, modifiers)
+        modifiers = _enemy_modifiers(enemy, spawned.library_buffs, buff_table)
+        hp, attack, defense = _enemy_metrics(attributes, spawned.level, modifiers)
         result.append(
             StageEnemy(
-                enemy_id=enemy_id,
+                enemy_id=spawned.enemy_id,
                 name=_translated(display.get("name"), text_table) or template_id,
                 icon_url=f"{AKEDATA_ASSET_BASE_URL}/monstericonbig/{template_id}.png",
-                level=level,
+                level=spawned.level,
                 hp=hp,
                 attack=attack,
                 defense=defense,
@@ -784,6 +776,73 @@ def _enemies(
             )
         )
     return tuple(result)
+
+
+@dataclass(frozen=True, slots=True)
+class _SpawnedEnemy:
+    """One concrete enemy a stage places: its ``EnemyTable`` row plus the library buffs."""
+
+    enemy_id: str
+    row: dict[str, Any]
+    level: int | None
+    library_buffs: tuple[dict[str, Any], ...]
+
+
+def _spawned_enemies(
+    dungeon: dict[str, Any],
+    enemy_table: dict[str, Any],
+    spawner_configs: tuple[dict[str, Any], ...] = (),
+    level_script_enemies: tuple[dict[str, Any], ...] = (),
+) -> tuple[_SpawnedEnemy, ...]:
+    """Expand ``DungeonTable.enemyIds`` to the concrete enemies the stage places.
+
+    ``enemyIds`` name the base monster, while the waves (or, without a wave, the level
+    script) place a variant row such as ``eny_0127_bigents_hdg032`` that carries its own
+    ``attrModifiers``/``bornBuffs``: the 出生加成 on top of the base template.  Each base
+    id becomes every placed enemy of its ``templateId``, in placement order, and several
+    variants stay separate entries, each with the library buffs of its own entries.
+    Only when nothing is placed does the base row stand in, as before.
+    """
+    configs = _applicable_spawner_configs(spawner_configs, dungeon)
+    levels = dungeon.get("enemyLevels") or ()
+    spawned: list[_SpawnedEnemy] = []
+    seen: set[tuple[str, int | None]] = set()
+    for index, raw_id in enumerate(dungeon.get("enemyIds") or ()):
+        base_id = str(raw_id or "")
+        if not base_id or not isinstance(enemy_table.get(base_id), dict):
+            continue
+        level = _optional_int(levels[index]) if index < len(levels) else None
+        placed = _known_enemy_ids(
+            _matching_spawner_entries(configs, base_id, enemy_table), enemy_table
+        ) or _known_enemy_ids(
+            _matching_script_entries(level_script_enemies, base_id, level, enemy_table),
+            enemy_table,
+        )
+        for enemy_id in placed or (base_id,):
+            if (enemy_id, level) in seen:
+                continue
+            seen.add((enemy_id, level))
+            library_buffs = _matching_spawner_buffs(
+                configs, enemy_id, enemy_table, exact_id=bool(placed)
+            ) + _matching_script_buffs(level_script_enemies, enemy_id, level, enemy_table)
+            spawned.append(
+                _SpawnedEnemy(enemy_id, enemy_table[enemy_id], level, library_buffs)
+            )
+    return tuple(spawned)
+
+
+def _known_enemy_ids(
+    entries: tuple[dict[str, Any], ...], enemy_table: dict[str, Any]
+) -> tuple[str, ...]:
+    """Distinct ``enemyId``s of library entries that have an ``EnemyTable`` row, in order."""
+    return tuple(
+        dict.fromkeys(
+            enemy_id
+            for entry in entries
+            if (enemy_id := str(entry.get("enemyId") or ""))
+            and isinstance(enemy_table.get(enemy_id), dict)
+        )
+    )
 
 
 def _enemy_metrics(
@@ -801,7 +860,7 @@ def _enemy_metrics(
         }
         if _optional_int(values.get(0)) == level:
             return tuple(
-                _integer_combat_stat(
+                _combat_stat(
                     _apply_modifiers(
                         _optional_number(values.get(attr_type)), modifiers, attr_type
                     )
@@ -811,9 +870,13 @@ def _enemy_metrics(
     return None, None, None
 
 
-def _integer_combat_stat(value: int | float | None) -> int | None:
-    """Game-facing HP/ATK/DEF are integer stats; positive fractions are truncated."""
-    return int(value) if value is not None else None
+def _combat_stat(value: int | float | None) -> int | float | None:
+    """HP/ATK/DEF as the game shows them: whole values stay integers, fractions keep
+    two decimals (苦难 bigents: 1467462 × 1.8 × 1.1 = 2,905,574.76)."""
+    if value is None:
+        return None
+    rounded = round(float(value), 2)
+    return int(rounded) if rounded.is_integer() else rounded
 
 
 def _stage_buff_ids(
@@ -822,27 +885,24 @@ def _stage_buff_ids(
     spawners_by_scene: dict[str, tuple[dict[str, Any], ...]],
     scripts_by_scene: dict[str, tuple[dict[str, Any], ...]] | None = None,
 ) -> set[str]:
+    """Every BuffData id ``_enemies`` will read: the placed rows' ``bornBuffs`` (the
+    variant's, not the base's) and their spawner/script library buffs."""
     buff_ids: set[str] = set()
     scripts_by_scene = scripts_by_scene or {}
     for row in records:
-        levels = row.get("enemyLevels") or ()
         scene_id = str(row.get("sceneId") or "")
-        configs = _applicable_spawner_configs(
-            spawners_by_scene.get(scene_id, ()), row
-        )
-        scripts = scripts_by_scene.get(scene_id, ())
-        for index, raw_enemy_id in enumerate(row.get("enemyIds") or ()):
-            enemy_id = str(raw_enemy_id or "")
-            enemy = enemy_table.get(enemy_id)
-            if isinstance(enemy, dict):
-                buff_ids.update(str(buff_id) for buff_id in enemy.get("bornBuffs") or () if buff_id)
-            level = _optional_int(levels[index]) if index < len(levels) else None
-            for buff in (
-                *_matching_spawner_buffs(configs, enemy_id, enemy_table),
-                *_matching_script_buffs(scripts, enemy_id, level, enemy_table),
-            ):
-                if buff.get("buffId"):
-                    buff_ids.add(str(buff["buffId"]))
+        for spawned in _spawned_enemies(
+            row,
+            enemy_table,
+            spawners_by_scene.get(scene_id, ()),
+            scripts_by_scene.get(scene_id, ()),
+        ):
+            buff_ids.update(
+                str(buff_id) for buff_id in spawned.row.get("bornBuffs") or () if buff_id
+            )
+            buff_ids.update(
+                str(buff["buffId"]) for buff in spawned.library_buffs if buff.get("buffId")
+            )
     return buff_ids
 
 
@@ -958,10 +1018,28 @@ def _applicable_spawner_configs(
     return tuple(applicable)
 
 
+def _matching_spawner_entries(
+    configs: tuple[dict[str, Any], ...],
+    enemy_id: str,
+    enemy_table: dict[str, Any],
+) -> tuple[dict[str, Any], ...]:
+    """Wave-placed library entries of the same monster (``templateId``) as ``enemy_id``."""
+    target_template = _enemy_template_id(enemy_id, enemy_table)
+    return tuple(
+        library_enemy
+        for config in configs
+        for library_enemy in _wave_library_entries(config)
+        if _enemy_template_id(str(library_enemy.get("enemyId") or ""), enemy_table)
+        == target_template
+    )
+
+
 def _matching_spawner_buffs(
     configs: tuple[dict[str, Any], ...],
     enemy_id: str,
     enemy_table: dict[str, Any] | None = None,
+    *,
+    exact_id: bool = False,
 ) -> tuple[dict[str, Any], ...]:
     """Union the ``bornBuffList`` a stage's applicable configs give one enemy.
 
@@ -970,35 +1048,33 @@ def _matching_spawner_buffs(
     level: the site buckets them per spawned enemy instance, so the same monster's
     entries across a scene's configs all apply.  Duplicates are resolved first-wins by
     ``buffId``, matching the site's own dedup over its alphabetically ordered configs.
+    With ``exact_id`` only entries placing ``enemy_id`` itself count: once a base id has
+    been expanded to its placed variants, each variant keeps its own bucket.
     """
     enemy_table = enemy_table or {}
-    target_template = _enemy_template_id(enemy_id, enemy_table)
     buffs: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
-    for config in configs:
-        for library_enemy in _wave_library_entries(config):
-            if _enemy_template_id(
-                str(library_enemy.get("enemyId") or ""), enemy_table
-            ) != target_template:
+    for library_enemy in _matching_spawner_entries(configs, enemy_id, enemy_table):
+        if exact_id and str(library_enemy.get("enemyId") or "") != enemy_id:
+            continue
+        for buff in library_enemy.get("bornBuffList") or ():
+            if not isinstance(buff, dict):
                 continue
-            for buff in library_enemy.get("bornBuffList") or ():
-                if not isinstance(buff, dict):
-                    continue
-                buff_id = str(buff.get("buffId") or "")
-                if not buff_id or buff_id in seen_ids:
-                    continue
-                seen_ids.add(buff_id)
-                buffs.append(buff)
+            buff_id = str(buff.get("buffId") or "")
+            if not buff_id or buff_id in seen_ids:
+                continue
+            seen_ids.add(buff_id)
+            buffs.append(buff)
     return tuple(buffs)
 
 
-def _matching_script_buffs(
+def _matching_script_entries(
     level_script_enemies: tuple[dict[str, Any], ...],
     enemy_id: str,
     level: int | None,
     enemy_table: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], ...]:
-    """Scripted buffs for one enemy, mirroring ``AKECombatData.staticEnemyBuffs``.
+    """Level-script entries for one enemy, mirroring ``AKECombatData.staticEnemyBuffs``.
 
     Entries match on enemy id (variant or base) at the exact level; when no entry
     matches the level, a single same-enemy entry still applies, as on the site.
@@ -1017,10 +1093,21 @@ def _matching_script_buffs(
         )
     ]
     exact = [entry for entry in matches if _optional_int(entry.get("enemyLevel")) == level]
-    selected = exact or (matches if len(matches) == 1 else [])
+    return tuple(exact or (matches if len(matches) == 1 else []))
+
+
+def _matching_script_buffs(
+    level_script_enemies: tuple[dict[str, Any], ...],
+    enemy_id: str,
+    level: int | None,
+    enemy_table: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], ...]:
+    """Scripted buffs of the entries ``_matching_script_entries`` selects."""
     return tuple(
         buff
-        for entry in selected
+        for entry in _matching_script_entries(
+            level_script_enemies, enemy_id, level, enemy_table
+        )
         for buff in entry.get("bornBuffList") or ()
         if isinstance(buff, dict)
     )

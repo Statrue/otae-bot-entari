@@ -39,6 +39,8 @@ from plugins.endfield.stages.akedata import (
     _enemy_template_id,
     _matching_script_buffs,
     _matching_spawner_buffs,
+    _spawned_enemies,
+    _stage_buff_ids,
     _translated,
     _wave_library_entries,
     parse_akedata_catalog,
@@ -958,7 +960,8 @@ class EndfieldAkeDataStageSourceTests(unittest.TestCase):
             buff_table=buffs,
         )
         enemy = stage.variants[-1].enemies[0]
-        self.assertEqual((enemy.hp, enemy.attack, enemy.defense), (2476342, 4130, 100))
+        # 917164 × 1.5 × 1.8 keeps its fraction instead of being truncated.
+        self.assertEqual((enemy.hp, enemy.attack, enemy.defense), (2476342.8, 4130, 100))
         self.assertEqual((enemy.poise.max_value, enemy.poise.recover_seconds), (980.0, 10.0))
         self.assertEqual((enemy.poise.damage_scalar, enemy.poise.recover_scalar), (1.5, 1.8))
         self.assertIsNone(enemy.poise.knots)
@@ -1399,6 +1402,279 @@ class EndfieldAkeDataSpawnerSemanticsTests(unittest.TestCase):
         self.assertEqual(_enemy_template_id("eny_unknown", {}), "eny_unknown")
 
 
+class EndfieldAkeDataVariantEnemyTests(unittest.TestCase):
+    """``DungeonTable.enemyIds`` name the base monster; the waves place a variant row whose
+    own ``attrModifiers`` (出生加成) must reach the card.  Numbers follow indie_hard032_s
+    苦难: base Lv90 HP 1467462 / ATK 4130, the _hdg032 variant ×1.8 HP, the spawner +10% HP
+    and -20% ATK; the game shows 2,905,574.76 / 3,304 / 100."""
+
+    BASE_ID = "eny_0127_bigents"
+    VARIANT_ID = "eny_0127_bigents_hdg032"
+    SIBLING_ID = "eny_0127_bigents_hdg032_elite"
+    SCENE_ID = "indie_hdg032"
+    HARD_BUFFS = (
+        {"buffId": "buff_dung_maxhp_01", "blackboard": [{"key": "ratio", "valueFloat": 0.1}]},
+        {"buffId": "buff_dung_atk_01", "blackboard": [{"key": "ratio", "valueFloat": -0.2}]},
+    )
+
+    @classmethod
+    def _enemy_table(cls) -> dict:
+        def row(enemy_id: str, born_buffs: list, hp_bonus: float | None) -> dict:
+            return {
+                "enemyId": enemy_id,
+                "templateId": cls.BASE_ID,
+                "attrTemplateId": cls.BASE_ID,
+                "bornBuffs": born_buffs,
+                "attrModifiers": (
+                    [{"attrType": 1, "modifierType": 1, "attrValue": hp_bonus}]
+                    if hp_bonus is not None
+                    else []
+                ),
+            }
+
+        return {
+            cls.BASE_ID: row(cls.BASE_ID, ["buff_base_only_fixture"], None),
+            cls.VARIANT_ID: row(cls.VARIANT_ID, ["buff_hdg032_born_fixture"], 0.8),
+            cls.SIBLING_ID: row(cls.SIBLING_ID, [], 0.5),
+        }
+
+    @staticmethod
+    def _ratio_buff(attribute_type: str) -> dict:
+        return {
+            "attributeModifier": {
+                "attributeModifiers": [
+                    {
+                        "attributeType": attribute_type,
+                        "formulaItem": "Multiplier",
+                        "param": {"useBlackboardKey": True, "blackboardKey": "ratio", "value": 0.0},
+                    }
+                ]
+            }
+        }
+
+    @staticmethod
+    def _config(config_id: str, level: int, entries: tuple) -> dict:
+        """A SpawnerConfig whose one wave places every ``(key, enemy_id, buffs)`` entry."""
+        return {
+            "configId": config_id,
+            "enemyLibrary": [
+                {"key": key, "enemyId": enemy_id, "enemyLevel": level, "bornBuffList": list(buffs)}
+                for key, enemy_id, buffs in entries
+            ],
+            "waveMap": {
+                "1": {
+                    "groupMap": {
+                        "1": {
+                            "actionMap": {
+                                str(index): {
+                                    "$type": "Beyond.Gameplay.SpawnerActions"
+                                    "+SpawnMonsterFromTemplateV2, Gameplay.Beyond",
+                                    "libraryKey": key,
+                                }
+                                for index, (key, _, _) in enumerate(entries, 1)
+                            }
+                        }
+                    }
+                }
+            },
+        }
+
+    def _records(self) -> tuple[dict, dict]:
+        normal = {
+            "dungeonId": "indie_hard032",
+            "dungeonSeriesId": "indie_group_h16",
+            "dungeonCategory": "dungeon_highdifficulty",
+            "dungeonName": {"id": 2, "text": ""},
+            "sceneId": self.SCENE_ID,
+            "recommendLv": 60,
+            "enemyIds": [self.BASE_ID],
+            "enemyLevels": [60],
+        }
+        hard = {
+            **normal,
+            "dungeonId": "indie_hard032_s",
+            "dungeonName": {"id": 3, "text": ""},
+            "recommendLv": 90,
+            "enemyLevels": [90],
+        }
+        return normal, hard
+
+    def _spawners(self, hard_entries: tuple | None = None) -> dict:
+        if hard_entries is None:
+            hard_entries = (("BOSS", self.VARIANT_ID, self.HARD_BUFFS),)
+        return {
+            self.SCENE_ID: (
+                self._config("sc_indie_hdg032_hard", 90, hard_entries),
+                self._config("sc_indie_hdg032_normal", 60, (("BOSS", self.VARIANT_ID, ()),)),
+            )
+        }
+
+    def _stage(self, hard_entries: tuple | None = None, *, spawners: dict | None = None) -> Stage:
+        version = AkeDataVersion(
+            "1.6.0@fixture-1", "public/1.6.0/fixture-1/TableCfg", "2026-10-23T00:00:00Z"
+        )
+        normal, hard = self._records()
+        series = {
+            "indie_group_h16": {
+                "id": "indie_group_h16",
+                "gameCategory": "dungeon_highdifficulty",
+                "sortId": 16,
+                "name": {"id": 1, "text": ""},
+                "includeDungeonIds": [normal["dungeonId"], hard["dungeonId"]],
+            }
+        }
+        texts = {"1": "丰碑测试系列", "2": "丰碑测试", "3": "丰碑测试·苦难", "4": "测试巨兽"}
+        displays = {self.BASE_ID: {"templateId": self.BASE_ID, "name": {"id": 4, "text": ""}}}
+        attributes = {
+            self.BASE_ID: {
+                "levelDependentAttributes": [
+                    {
+                        "attrs": [
+                            {"attrType": 0, "attrValue": level},
+                            {"attrType": 1, "attrValue": hp},
+                            {"attrType": 2, "attrValue": attack},
+                            {"attrType": 3, "attrValue": 100},
+                        ]
+                    }
+                    for level, hp, attack in ((60, 358880, 1916), (90, 1467462, 4130))
+                ]
+            }
+        }
+        buffs = {
+            "buff_dung_maxhp_01": self._ratio_buff("MaxHp"),
+            "buff_dung_atk_01": self._ratio_buff("Atk"),
+            "buff_hdg032_born_fixture": {
+                "attributeModifier": {
+                    "attributeModifiers": [
+                        {
+                            "attributeType": "PoiseRecTimeScalar",
+                            "formulaItem": "Multiplier",
+                            "param": {"useBlackboardKey": False, "value": 0.8},
+                        }
+                    ]
+                }
+            },
+        }
+        return parse_akedata_stage(
+            version,
+            "indie_hard032",
+            series,
+            {normal["dungeonId"]: normal, hard["dungeonId"]: hard},
+            texts,
+            {},
+            {},
+            self._enemy_table(),
+            displays,
+            attributes,
+            spawners_by_scene=self._spawners(hard_entries) if spawners is None else spawners,
+            buff_table=buffs,
+        )
+
+    @staticmethod
+    def _stats(variant: StageVariant) -> list[tuple]:
+        return [
+            (enemy.enemy_id, enemy.level, enemy.hp, enemy.attack, enemy.defense)
+            for enemy in variant.enemies
+        ]
+
+    def test_hard_stats_include_the_variant_birth_bonus(self):
+        stage = self._stage()
+        hard = stage.variants[-1]
+        self.assertEqual(hard.label, "苦难")
+        # Before: the base row only, 1467462 × 1.1 truncated to 1614208.
+        self.assertEqual(self._stats(hard), [(self.VARIANT_ID, 90, 2905574.76, 3304, 100)])
+        self.assertEqual(hard.enemies[0].name, "测试巨兽")
+        # The variant's own bornBuffs apply too, not the base row's.
+        self.assertEqual(hard.enemies[0].poise.recover_scalar, 1.8)
+
+        html = render_stage_card_html(StageCardView(stage, "detail", hard))
+        self.assertIn("<span>生命</span><b>2,905,574.76</b>", html)
+        self.assertIn("<span>攻击</span><b>3,304</b>", html)
+        self.assertIn("<span>防御</span><b>100</b>", html)
+
+    def test_normal_stats_use_the_variant_without_the_hard_spawner_buffs(self):
+        normal, _hard = self._stage().variants
+        self.assertEqual(normal.label, "普通")
+        self.assertEqual(self._stats(normal), [(self.VARIANT_ID, 60, 645984, 1916, 100)])
+
+    def test_each_placed_variant_is_listed_separately(self):
+        sibling_buffs = (
+            {"buffId": "buff_dung_maxhp_01", "blackboard": [{"key": "ratio", "valueFloat": 0.2}]},
+        )
+        stage = self._stage(
+            (
+                ("BOSS", self.VARIANT_ID, self.HARD_BUFFS),
+                ("ELITE", self.SIBLING_ID, sibling_buffs),
+            )
+        )
+        hard = stage.variants[-1]
+        # Each variant keeps its own library bucket: the sibling's +20% HP does not reach
+        # the boss, and the boss's -20% ATK does not reach the sibling.
+        self.assertEqual(
+            self._stats(hard),
+            [
+                (self.VARIANT_ID, 90, 2905574.76, 3304, 100),
+                (self.SIBLING_ID, 90, 2641431.6, 4130, 100),
+            ],
+        )
+        html = render_stage_card_html(StageCardView(stage, "detail", hard))
+        self.assertIn("<span>生命</span><b>2,905,574.76</b>", html)
+        self.assertIn("<span>生命</span><b>2,641,431.60</b>", html)
+
+    def test_stage_without_variant_rows_keeps_the_base_row(self):
+        # The waves place the base id itself: template + spawner buffs, as before.
+        hard = self._stage((("BOSS", self.BASE_ID, self.HARD_BUFFS),)).variants[-1]
+        self.assertEqual(self._stats(hard), [(self.BASE_ID, 90, 1614208.2, 3304, 100)])
+        # No spawner export at all: the bare template.
+        normal, hard = self._stage(spawners={}).variants
+        self.assertEqual(self._stats(normal), [(self.BASE_ID, 60, 358880, 1916, 100)])
+        self.assertEqual(self._stats(hard), [(self.BASE_ID, 90, 1467462, 4130, 100)])
+
+    def test_buff_preload_covers_the_variant_born_buffs(self):
+        buff_ids = _stage_buff_ids(self._records(), self._enemy_table(), self._spawners())
+        self.assertEqual(
+            buff_ids,
+            {"buff_hdg032_born_fixture", "buff_dung_maxhp_01", "buff_dung_atk_01"},
+        )
+
+    def test_level_script_places_the_variant_when_no_wave_does(self):
+        enemies = self._enemy_table()
+        dungeon = {"enemyIds": [self.BASE_ID], "enemyLevels": [90], "recommendLv": 90}
+        script = _enemy_instance_config(
+            {
+                "scriptId": 47400320001,
+                "enemies": {
+                    "30001": {"entityDataIdKey": self.VARIANT_ID, "level": 90, "buffs": []}
+                },
+            }
+        )
+        self.assertEqual(
+            [spawned.enemy_id for spawned in _spawned_enemies(dungeon, enemies, (), (script,))],
+            [self.VARIANT_ID],
+        )
+        self.assertEqual(
+            [spawned.enemy_id for spawned in _spawned_enemies(dungeon, enemies)],
+            [self.BASE_ID],
+        )
+
+    def test_base_and_variant_ids_resolving_to_one_placement_are_listed_once(self):
+        dungeon = {
+            "enemyIds": [self.BASE_ID, self.VARIANT_ID],
+            "enemyLevels": [90, 90],
+            "recommendLv": 90,
+        }
+        configs = self._spawners()[self.SCENE_ID]
+        spawned = _spawned_enemies(dungeon, self._enemy_table(), configs)
+        self.assertEqual([item.enemy_id for item in spawned], [self.VARIANT_ID])
+
+    def test_fractional_stats_render_with_two_decimals(self):
+        self.assertEqual(stage_draw._amount(2905574.76), "2,905,574.76")
+        self.assertEqual(stage_draw._amount(2476342.8), "2,476,342.80")
+        self.assertEqual(stage_draw._amount(3304), "3,304")
+        self.assertEqual(stage_draw._amount(1000.0), "1,000")
+        self.assertEqual(stage_draw._amount(None), "")
+
+
 class EndfieldAkeDataStageSourceAsyncTests(unittest.IsolatedAsyncioTestCase):
     async def test_crisis_fragment_boss_stats_come_directly_from_akedata(self):
         version, _ = _akedata_fixture()
@@ -1613,9 +1889,9 @@ class EndfieldAkeDataStageSourceAsyncTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             [variant.enemies[0].hp for variant in noise_stage.variants],
-            [1286498, 2320424],
+            [1286498.1, 2320424],
         )
-        self.assertEqual(mountain_stage.variants[0].enemies[0].hp, 1994830)
+        self.assertEqual(mountain_stage.variants[0].enemies[0].hp, 1994830.5)
         self.assertEqual(noise_stage.source.source, "AkeData")
         self.assertEqual(mountain_stage.source.source, "AkeData")
 
@@ -1773,7 +2049,7 @@ class EndfieldAkeDataStageSourceAsyncTests(unittest.IsolatedAsyncioTestCase):
         client.akedata_public_json.side_effect = lambda path: resource_map[path]
         source = AkeDataStageSource(client)
         stage, _ = await source.stage("indie_hard022")
-        self.assertEqual(stage.variants[-1].enemies[0].hp, 2476342)
+        self.assertEqual(stage.variants[-1].enemies[0].hp, 2476342.8)
         self.assertEqual(client.akedata_public_json.await_count, 2)
         await source.stage("indie_hard022")
         self.assertEqual(client.akedata_public_json.await_count, 2)

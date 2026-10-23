@@ -1002,7 +1002,12 @@ def _level_label(level: int | None) -> str:
 
 
 def _amount(value: int | float | None) -> str:
-    return f"{value:,}" if value is not None else ""
+    """Thousands-separated; a fractional stat keeps two decimals, as in game (2,905,574.76)."""
+    if value is None:
+        return ""
+    if isinstance(value, float) and not value.is_integer():
+        return f"{value:,.2f}"
+    return f"{int(value):,}"
 
 
 def _short_date(value: str) -> str:

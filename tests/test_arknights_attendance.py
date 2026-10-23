@@ -1518,7 +1518,7 @@ class ArknightsHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(built_on[0], loop_thread)
         self.assertEqual(constructed, [context])
 
-    async def _bind(self, *answers, phone_code=None):
+    async def _bind(self, *answers, phone_code=None, send_phone_code=None):
         """Run /ak 绑定 with scripted replies, recording sensitivity per prompt."""
         from otae_bot.adapters import message_log
 
@@ -1538,7 +1538,7 @@ class ArknightsHandlerTests(unittest.IsolatedAsyncioTestCase):
         store = store_module.ArknightsStore(Path(directory.name) / "ak.db")
         self.addCleanup(store.close)
         client = mock.Mock(
-            send_phone_code=mock.AsyncMock(),
+            send_phone_code=send_phone_code or mock.AsyncMock(),
             token_by_phone_code=mock.AsyncMock(return_value=phone_code),
             discover_roles=mock.AsyncMock(
                 return_value=[store_module.RoleCandidate("10001234", "1", "甲", "官服")]
@@ -1569,7 +1569,7 @@ class ArknightsHandlerTests(unittest.IsolatedAsyncioTestCase):
     async def test_sms_binding_keeps_the_phone_and_code_out_of_the_message_log(self):
         phone, code, token = "13812345678", "654321", "sms-account-token-secret-value"
         matcher, prompts, client = await self._bind("2", phone, code, phone_code=token)
-        client.send_phone_code.assert_awaited_once_with(phone)
+        client.send_phone_code.assert_awaited_once_with(phone, captcha=None)
         client.token_by_phone_code.assert_awaited_once_with(phone, code)
         self.assertIn("绑定完成", matcher.last_text())
         self.assertEqual(len(prompts), 3)
@@ -1577,6 +1577,51 @@ class ArknightsHandlerTests(unittest.IsolatedAsyncioTestCase):
         logged = "\n".join(line for _message, _sensitive, line in prompts)
         for secret in (phone, code, phone[3:7]):
             self.assertNotIn(secret, logged)
+
+    async def test_sms_captcha_is_solved_in_a_browser_and_the_code_is_resent_with_its_result(self):
+        from otae_bot import hypergryph_captcha
+
+        phone, code, token = "13812345678", "654321", "sms-account-token-secret-value"
+        gt, challenge = "c9c4facd1a6feeb80802222a1a0b6a5e", "1d8c0f9a2b3c4d5e6f7a8b9c0d1e2f3a"
+        result = {
+            "geetest_challenge": challenge + "k3",
+            "geetest_validate": "5f0e3c2b1a09d8e7f6a5b4c3d2e1f0a9",
+            "geetest_seccode": "5f0e3c2b1a09d8e7f6a5b4c3d2e1f0a9|jordan",
+        }
+        required = self.handlers.HypergryphCaptchaRequired(
+            hypergryph_captcha.CaptchaChallenge(gt, challenge, True, {"gt": gt, "challenge": challenge}),
+            operation="发送验证码",
+        )
+        send = mock.AsyncMock(side_effect=[required, None])
+        upload = mock.AsyncMock(return_value="https://0x0.st/Akcaptcha.html")
+        with mock.patch.object(self.handlers, "upload_captcha_page", upload):
+            matcher, prompts, _client = await self._bind(
+                "2", phone, json.dumps(result), code, phone_code=token, send_phone_code=send
+            )
+        self.assertEqual(send.await_args_list, [mock.call(phone, captcha=None), mock.call(phone, captcha=result)])
+        self.assertIn(gt, upload.await_args.args[0])
+        self.assertIn(f"{hypergryph_captcha.CAPTCHA_GUIDE}\nhttps://0x0.st/Akcaptcha.html", matcher.sent)
+        self.assertIn("绑定完成", matcher.last_text())
+        self.assertEqual(len(prompts), 4)
+        self.assertTrue(all(sensitive for _message, sensitive, _log in prompts))
+        logged = "\n".join(line for _message, _sensitive, line in prompts)
+        self.assertNotIn(result["geetest_validate"], logged)
+
+    async def test_sms_captcha_upload_failure_ends_binding_and_suggests_token(self):
+        from otae_bot import hypergryph_captcha
+
+        required = self.handlers.HypergryphCaptchaRequired(
+            hypergryph_captcha.CaptchaChallenge("c9c4facd1a6feeb8", "1d8c0f9a2b3c4d5e", False, {}),
+            operation="发送验证码",
+        )
+        send = mock.AsyncMock(side_effect=[required])
+        upload = mock.AsyncMock(side_effect=hypergryph_captcha.CaptchaPageUploadError("0x0.st:http_503"))
+        with mock.patch.object(self.handlers, "upload_captcha_page", upload):
+            matcher, _prompts, client = await self._bind("2", "13812345678", send_phone_code=send)
+        self.assertEqual(matcher.last_text(), hypergryph_captcha.CAPTCHA_UPLOAD_FAILED)
+        self.assertEqual(matcher.sent, [])
+        send.assert_awaited_once()
+        client.token_by_phone_code.assert_not_awaited()
 
     async def test_a_failed_binding_still_ends_the_sensitive_dialog(self):
         from otae_bot.adapters import message_log

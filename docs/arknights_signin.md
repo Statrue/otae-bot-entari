@@ -44,6 +44,10 @@
 `/ak 绑定` 的整个对话都在 `sensitive_input` 里进行（与终末地绑定一致）：用户回复的 Token、
 手机号与短信验证码在 Entari 的 `[message]` 日志中被遮盖，对话结束或出错后自动恢复。
 
+鹰角风控要求人机验证时，短信绑定会先走一轮极验，流程、文案和轮数上限与终末地完全相同，
+见 [终末地账号绑定流程 · 人机验证](endfield_binding.md#人机验证)。这一步记 `[arknights-bind]` 日志
+（`captcha_required` / `captcha_page_sent` / `captcha_received` / `abort`），同样不含手机号与验证结果。
+
 ## 配置
 
 ```dotenv

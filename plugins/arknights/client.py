@@ -32,6 +32,7 @@ from urllib.parse import urlencode
 
 import httpx
 
+from otae_bot.hypergryph_captcha import CaptchaChallenge, captcha_challenge, captcha_result_body
 from otae_bot.infrastructure.http.tls import shared_ssl_context
 
 from .store import RoleCandidate
@@ -120,6 +121,23 @@ class ArknightsAPIError(RuntimeError):
         self.operation = operation
         self.code = code
         self.already_signed = already_signed
+
+
+class HypergryphCaptchaRequired(ArknightsAPIError):
+    """The passport wants a GeeTest check before sending the SMS code.
+
+    ``captcha`` is the raw ``data.captcha``; like every other error here, the
+    message is a local label, never the server's text.
+    """
+
+    def __init__(self, challenge: CaptchaChallenge, *, operation: str, code: str = "1"):
+        super().__init__(
+            "鹰角触发了人机验证，需要先完成验证才能发送验证码。", operation=operation, code=code
+        )
+        self.gt = challenge.gt
+        self.challenge = challenge.challenge
+        self.new_captcha = challenge.new_captcha
+        self.captcha = dict(challenge.raw)
 
 
 @dataclass(frozen=True, slots=True)
@@ -712,13 +730,20 @@ class ArknightsClient:
 
     # ------------------------------------------------------------ login flow
 
-    async def send_phone_code(self, phone: str) -> None:
-        await self._json_request(
-            "发送验证码",
-            "POST",
-            f"{AS_BASE}{PHONE_CODE_PATH}",
-            json_body={"phone": str(phone), "type": PHONE_CODE_TYPE},
+    async def send_phone_code(self, phone: str, *, captcha: Mapping[str, str] | None = None) -> None:
+        body: dict[str, Any] = {"phone": str(phone), "type": PHONE_CODE_TYPE}
+        if captcha is not None:
+            body["captcha"] = captcha_result_body(captcha)
+        # Risk control answers status=1 with the GeeTest parameters in
+        # data.captcha; recognise that first, every other failure stays as before.
+        response, payload = await self._json_response(
+            "发送验证码", "POST", f"{AS_BASE}{PHONE_CODE_PATH}", json_body=body
         )
+        challenge = captcha_challenge(payload)
+        if challenge is not None:
+            safe = safe_business_code(payload.get("status"))
+            raise HypergryphCaptchaRequired(challenge, operation="发送验证码", code=safe)
+        self._check_payload("发送验证码", response, payload)
 
     async def token_by_phone_code(self, phone: str, code: str) -> str:
         payload = await self._json_request(
@@ -1024,6 +1049,24 @@ class ArknightsClient:
         headers: Mapping[str, str] | None = None,
         content: bytes | None = None,
     ) -> dict[str, Any]:
+        response, payload = await self._json_response(
+            operation, method, url, params=params, json_body=json_body, headers=headers, content=content
+        )
+        self._check_payload(operation, response, payload)
+        return payload
+
+    async def _json_response(
+        self,
+        operation: str,
+        method: str,
+        url: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        json_body: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
+        content: bytes | None = None,
+    ) -> tuple[httpx.Response, dict[str, Any]]:
+        """Send one request and decode its JSON object; business codes are checked by the caller."""
         try:
             response = await self.http.request(
                 method,
@@ -1051,6 +1094,9 @@ class ArknightsClient:
             raise ArknightsAPIError("官方接口返回了无法解析的数据。", operation=operation)
         if not isinstance(payload, Mapping):
             raise ArknightsAPIError("官方接口返回格式异常。", operation=operation)
+        return response, dict(payload)
+
+    def _check_payload(self, operation: str, response: httpx.Response, payload: Mapping[str, Any]) -> None:
         code = payload.get("code")
         status = payload.get("status")
         if code not in (None, 0, "0"):
@@ -1063,7 +1109,6 @@ class ArknightsClient:
                 operation=operation,
                 code=str(response.status_code),
             )
-        return dict(payload)
 
     @staticmethod
     def _business_error(operation: str, code: Any) -> ArknightsAPIError:

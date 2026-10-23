@@ -15,6 +15,7 @@ otae_bot/
   group_features.py            按机器人账号和群保存插件开关
   attendance_registry.py       双游戏签到：游戏注册表与调度循环（不导入插件）
   attendance_delivery.py       双游戏签到：结果卡拼接、发送与文字回退
+  hypergryph_captcha.py        鹰角短信风控的极验：验证页、结果解析、临时页面上传（双游戏共用）
   group_permissions.py         当前机器人账号、当前群的管理员权限核验
   paths.py                     随源码定位的资源根目录
   config/                      环境变量解析、原有路径配置

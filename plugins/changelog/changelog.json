@@ -1,11 +1,11 @@
 {
   "schema": 2,
-  "head": "89b0cea",
+  "head": "46bf4b0",
   "generated_from": {
     "first_commit": "8e1b455",
     "first_date": "2026-06-17",
     "last_date": "2026-10-23",
-    "commit_count": 371,
+    "commit_count": 372,
     "merge_commit_count": 36,
     "version_count": 49
   },
@@ -35,6 +35,14 @@
           "text": "使用率卡片的关卡名改回中文：官方挑战接口会直接返回英文原文（Cycle of Phantasia Ⅱ、Glaiver File: Yinglung），现在按 AKEData 对照回填，历史快照出卡时也会就地纠正。同时亚服角色不再参与使用率统计（两族挑战接口只有国服），卡片右下角去掉渲染版本号。",
           "commits": [
             "89b0cea"
+          ]
+        },
+        {
+          "date": "2026-10-23",
+          "kind": "fix",
+          "text": "使用率概览补上轮换里没人通关的关卡：官方每关只给一条最佳记录，之前全是「有记录才出现」，一期三关会只画出一关。现在缺数据的关卡也占位显示「本群还没有人在这关留下记录」，可统计关卡如实写成 1 / 3；点名查空关卡改出样本不足卡。",
+          "commits": [
+            "46bf4b0"
           ]
         }
       ]

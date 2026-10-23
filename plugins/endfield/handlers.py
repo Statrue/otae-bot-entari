@@ -230,6 +230,19 @@ from .ownership.service import (
     render_ownership_stats,
 )
 from .ownership.draw import draw_ownership_stats
+from .usage.draw import draw_usage_overview, draw_usage_stage
+from .usage.models import (
+    FAMILY_LABELS as USAGE_FAMILY_LABELS,
+    UsageStageReport,
+)
+from .usage.service import (
+    FAMILY_MONUMENT as USAGE_FAMILY_MONUMENT,
+    FAMILY_WAR_ECHO as USAGE_FAMILY_WAR_ECHO,
+    UsageRefreshResult as UsageStatsRefreshResult,
+    UsageResolutionError,
+    UsageStatsService,
+    UsageUnavailableError,
+)
 from .providers.akedata import clear_i18n_process_warm
 from .providers.registry import source_label, source_order
 from .cold_start import (
@@ -259,6 +272,7 @@ account_store = EndfieldStore()
 official_client = EndfieldOfficialClient()
 ownership_stats_service = OwnershipStatsService(account_store, official_client)
 register_ownership_stats_renderer(draw_ownership_stats)
+usage_stats_service = UsageStatsService(account_store, official_client)
 calendar_source = AkeDataVersionCalendarSource(client)
 official_calendar_source = OfficialVersionCalendarSource()
 medal_store = MedalSnapshotStore()
@@ -802,6 +816,123 @@ async def _handle_ownership_stats(
     return await matcher.finish(rendered)
 
 
+async def _handle_usage_stats(
+    matcher,
+    event: Event,
+    command: ParsedEndfieldCommand,
+    *,
+    bot=None,
+) -> None:
+    """群内关卡成员使用率:读快照聚合出卡,刷新走权限校验。"""
+    group_chat = is_group(event)
+    scope = command.scope if command.scope in {"group", "global"} else "auto"
+    if scope == "auto":
+        scope = "group" if group_chat else "global"
+    if scope == "group" and not group_chat:
+        return await matcher.finish("私聊环境不支持群内统计，请使用 /ef 影拓 使用率 全局。")
+
+    family = USAGE_FAMILY_WAR_ECHO if command.challenge_kind == "war_echo" else USAGE_FAMILY_MONUMENT
+    family_label = USAGE_FAMILY_LABELS[family]
+    user_id = str(event_user_id(event))
+    active_bot = bot
+    if scope == "group" and active_bot is None:
+        try:
+            active_bot = get_bot()
+        except RuntimeError:
+            return await matcher.finish("群成员列表获取失败，请稍后再试。")
+
+    if command.challenge_view == "usage_refresh":
+        if scope == "global":
+            if not _is_endfield_superuser(user_id):
+                return await matcher.finish(f"权限不足：仅机器人管理员可刷新全局{family_label}使用率快照。")
+        else:
+            guild_id = get_group_id(event)
+            if not _is_endfield_superuser(user_id) and not await is_group_manager(
+                active_bot, event, guild_id, user_id
+            ):
+                return await matcher.finish(
+                    f"权限不足：仅群主、群管理员或机器人管理员可刷新本群{family_label}使用率快照。"
+                )
+
+    if scope == "group":
+        try:
+            member_ids = await collect_group_member_ids(active_bot, get_group_id(event))
+        except GroupMemberListError as exc:
+            logger.warning(
+                "[endfield-usage] group member listing failed "
+                f"standard_error_type={exc.standard_error_type} "
+                f"fallback_error_type={exc.fallback_error_type}"
+            )
+            return await matcher.finish("获取本群成员列表失败，已终止统计任务。")
+        roles = account_store.list_all_roles(member_ids)
+    else:
+        roles = account_store.list_all_roles()
+    if not roles:
+        return await matcher.finish("统计范围内还没有绑定终末地账号的成员。")
+
+    if command.challenge_view == "usage_refresh":
+        try:
+            cipher = CredentialCipher.from_env()
+            with cold_start_command(matcher):
+                refresh = await usage_stats_service.refresh_roles(
+                    roles,
+                    cipher,
+                    force=True,
+                    trigger=f"manual-{scope}",
+                )
+        except CredentialKeyError as exc:
+            return await matcher.finish(str(exc))
+        return await matcher.finish(_format_usage_refresh_result(scope, refresh, family_label))
+
+    try:
+        with cold_start_command(matcher):
+            report = await asyncio.to_thread(
+                usage_stats_service.build_report,
+                scope,
+                roles,
+                family,
+                terms=command.challenge_terms,
+                difficulty=command.challenge_difficulty,
+            )
+            if isinstance(report, UsageStageReport):
+                pngs = await draw_usage_stage(report)
+            else:
+                pngs = await draw_usage_overview(report)
+    except UsageResolutionError as exc:
+        return await matcher.finish(str(exc))
+    except UsageUnavailableError:
+        hint = (
+            f"统计范围内还没有{family_label}挑战记录，请先让群友发一次 /ef "
+            + ("影拓" if family == USAGE_FAMILY_MONUMENT else "回响")
+            + "，或由群管理发送 /ef "
+            + ("影拓" if family == USAGE_FAMILY_MONUMENT else "回响")
+            + " 使用率 刷新。"
+        )
+        return await matcher.finish(hint)
+    except Exception as exc:
+        logger.exception(f"[endfield-usage] report failed: {exc}")
+        return await matcher.finish("使用率统计失败，请稍后再试。")
+    return await _finish_pngs(matcher, pngs)
+
+
+def _format_usage_refresh_result(
+    scope: str, refresh: UsageStatsRefreshResult, family_label: str
+) -> str:
+    scope_label = "全局" if scope == "global" else "本群"
+    lines = [
+        f"{family_label}使用率快照已刷新（{scope_label}）：",
+        f"成功 {refresh.succeeded} 个角色 · 失败 {refresh.failed} 个 · 跳过 {refresh.skipped} 个",
+    ]
+    if refresh.deferred:
+        lines.append(f"另有 {refresh.deferred} 个任务留到下一批。")
+    if refresh.stopped_early and refresh.stop_reason:
+        lines.append(f"已提前结束：{refresh.stop_reason}")
+    for issue in refresh.issues[:3]:
+        lines.append(f"· {issue.label}：{issue.count} 次")
+    lines.append("发送 /ef 影拓 使用率 或 /ef 回响 使用率 查看统计卡。")
+    return "\n".join(lines)
+
+
 def _is_endfield_superuser(user_id: str) -> bool:
     configured = Config.SUPERUSERS or ()
     if isinstance(configured, str):
@@ -1048,6 +1179,8 @@ async def _handle_challenge(
     bot=None,
 ) -> None:
     """Render one personal challenge query without prompting in group chats."""
+    if command.challenge_view in {"usage", "usage_refresh"}:
+        return await _handle_usage_stats(matcher, event, command, bot=bot)
     mentioned_users = _challenge_mention_targets(event, bot)
     if mentioned_users and not is_group(event):
         return await matcher.finish("通过 @群友 查询他人挑战数据仅限在群聊中使用。")
@@ -1186,6 +1319,7 @@ async def _render_challenge_cards(
     if command.challenge_kind == "monument":
         raw, locale = await asyncio.gather(load_data("monument"), load_locale())
         payload = parse_monument(raw, locale)
+        await _piggyback_usage_snapshot(role, USAGE_FAMILY_MONUMENT, raw, locale)
         if command.challenge_view == "overview":
             pngs = await cached_pages(
                 "monument", "overview", "", "", 0,
@@ -1226,6 +1360,7 @@ async def _render_challenge_cards(
 
     raw, locale = await asyncio.gather(load_data("war_echo"), load_locale())
     payload = parse_war_echoes(raw, locale)
+    await _piggyback_usage_snapshot(role, USAGE_FAMILY_WAR_ECHO, raw, locale)
     if command.challenge_view == "detail":
         # 只点到赛季/轮换（「错视赛季」「错视轮换」）就看赛季卡，不进关卡卡：
         # 赛季名要整个赛季，翻到列出全部轮换的历史页（当期赛季也一样）；
@@ -1277,6 +1412,20 @@ async def _render_challenge_cards(
         lambda: _one_page(draw_war_detail(identity, season, week, war_group, dungeon, variant=variant)),
     )
     return await _finish_pngs(matcher, rendered)
+
+
+async def _piggyback_usage_snapshot(role, family: str, raw, locale) -> None:
+    """挑战卡已经拿到官方响应,顺手把最佳记录队伍写进使用率快照。
+
+    失败只记 debug:这条路径是搭便车,不能影响用户这次查询。
+    """
+    try:
+        await usage_stats_service.persist_raw(role, family, raw, locale=locale)
+    except Exception as exc:
+        logger.debug(
+            "[endfield-usage] piggyback persist skipped "
+            f"family={family} error_type={type(exc).__module__}.{type(exc).__name__}"
+        )
 
 
 def _challenge_account_candidates(roles: list[EndfieldRole], selector: str) -> list[EndfieldRole]:
@@ -4136,6 +4285,27 @@ timer.add_job(
     "interval",
     hours=6,
     id="endfield_ownership_catalog_refresh",
+    replace_existing=True,
+    max_instances=1,
+)
+
+
+async def _refresh_due_usage_snapshots() -> None:
+    try:
+        cipher = CredentialCipher.from_env()
+        await usage_stats_service.refresh_due(cipher)
+    except Exception as exc:
+        logger.warning(
+            "[endfield-usage] scheduled refresh unavailable "
+            f"error_type={type(exc).__module__}.{type(exc).__name__}"
+        )
+
+
+timer.add_job(
+    _refresh_due_usage_snapshots,
+    "interval",
+    minutes=10,
+    id="endfield_usage_refresh",
     replace_existing=True,
     max_instances=1,
 )

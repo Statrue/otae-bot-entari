@@ -167,6 +167,73 @@ class XhhGachaImport:
     six_stars: tuple[XhhSixStar, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ChallengeRecordMember:
+    slot: int
+    operator_key: str
+    level: int = 0
+    potential: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ChallengeRecordRow:
+    """一次最佳记录落库后的一行（不含成员）。"""
+
+    activity_id: str
+    activity_name: str
+    stage_id: str
+    stage_name: str
+    difficulty: str
+    scope_id: str = ""
+    scope_name: str = ""
+    activity_start_ts: int = 0
+    activity_end_ts: int = 0
+    scope_start_ts: int = 0
+    scope_end_ts: int = 0
+    passed: bool = False
+    record_ts: int = 0
+    pass_time: int = 0
+    first_pass_ts: int = 0
+    members: tuple[ChallengeRecordMember, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ChallengeSnapshotState:
+    role_id: str
+    server_id: str
+    family: str
+    fetched_at: int = 0
+    last_attempt_at: int = 0
+    last_error: str = ""
+    failure_count: int = 0
+    next_attempt_at: int = 0
+    record_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ChallengeMemberRow:
+    """聚合查询用的一行：一条记录的元信息 + 一个上场成员。"""
+
+    role_id: str
+    server_id: str
+    activity_id: str
+    activity_name: str
+    scope_id: str
+    scope_name: str
+    stage_id: str
+    stage_name: str
+    difficulty: str
+    activity_start_ts: int
+    activity_end_ts: int
+    scope_start_ts: int
+    scope_end_ts: int
+    passed: bool
+    record_ts: int
+    pass_time: int
+    slot: int
+    operator_key: str
+
+
 class EndfieldStore:
     def __init__(self, db_path: str | Path = DB_PATH):
         self.db_path = Path(db_path)
@@ -373,6 +440,58 @@ class EndfieldStore:
                     ON settlement_snapshots(
                         role_id, server_id, settlement_id, captured_at DESC
                     );
+                CREATE TABLE IF NOT EXISTS challenge_snapshots (
+                    role_id TEXT NOT NULL,
+                    server_id TEXT NOT NULL,
+                    family TEXT NOT NULL,
+                    fetched_at INTEGER NOT NULL DEFAULT 0,
+                    last_attempt_at INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    failure_count INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at INTEGER NOT NULL DEFAULT 0,
+                    record_count INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(role_id, server_id, family)
+                );
+                CREATE INDEX IF NOT EXISTS idx_endfield_challenge_snapshot_freshness
+                    ON challenge_snapshots(family, fetched_at DESC);
+                CREATE TABLE IF NOT EXISTS challenge_records (
+                    role_id TEXT NOT NULL,
+                    server_id TEXT NOT NULL,
+                    family TEXT NOT NULL,
+                    activity_id TEXT NOT NULL DEFAULT '',
+                    activity_name TEXT NOT NULL DEFAULT '',
+                    scope_id TEXT NOT NULL DEFAULT '',
+                    scope_name TEXT NOT NULL DEFAULT '',
+                    stage_id TEXT NOT NULL,
+                    stage_name TEXT NOT NULL DEFAULT '',
+                    activity_start_ts INTEGER NOT NULL DEFAULT 0,
+                    activity_end_ts INTEGER NOT NULL DEFAULT 0,
+                    scope_start_ts INTEGER NOT NULL DEFAULT 0,
+                    scope_end_ts INTEGER NOT NULL DEFAULT 0,
+                    difficulty TEXT NOT NULL,
+                    passed INTEGER NOT NULL DEFAULT 0,
+                    record_ts INTEGER NOT NULL DEFAULT 0,
+                    pass_time INTEGER NOT NULL DEFAULT 0,
+                    first_pass_ts INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(role_id, server_id, family, stage_id, difficulty),
+                    FOREIGN KEY(role_id, server_id, family)
+                        REFERENCES challenge_snapshots(role_id, server_id, family)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS challenge_record_members (
+                    role_id TEXT NOT NULL,
+                    server_id TEXT NOT NULL,
+                    family TEXT NOT NULL,
+                    stage_id TEXT NOT NULL,
+                    difficulty TEXT NOT NULL,
+                    slot INTEGER NOT NULL,
+                    operator_key TEXT NOT NULL,
+                    level INTEGER NOT NULL DEFAULT 0,
+                    potential INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(role_id, server_id, family, stage_id, difficulty, slot)
+                );
+                CREATE INDEX IF NOT EXISTS idx_endfield_challenge_member_agg
+                    ON challenge_record_members(family, stage_id, difficulty, operator_key);
                 """
             )
             role_columns = {
@@ -1550,6 +1669,286 @@ class EndfieldStore:
             params.extend([like, pool_filter, like])
         with self._lock:
             return int(self.conn.execute(sql, tuple(params)).fetchone()["count"])
+
+    # --- 挑战记录快照（影拓丰碑 / 战争回响） ---------------------------------
+
+    def replace_challenge_snapshot(
+        self,
+        role_id: str,
+        server_id: str,
+        family: str,
+        records: Sequence[ChallengeRecordRow],
+        *,
+        fetched_at: int | None = None,
+    ) -> bool:
+        """整族覆盖写一次抓取的挑战记录。
+
+        只有 fetched_at 不比库里旧时才写，避免搭便车的旧响应覆盖后台批次刚
+        写入的新数据；返回是否真的写入。
+        """
+        current = int(fetched_at or time.time())
+        key = (str(role_id), str(server_id), str(family))
+        rows = [
+            (
+                key[0],
+                key[1],
+                key[2],
+                str(item.activity_id or ""),
+                str(item.activity_name or ""),
+                str(item.scope_id or ""),
+                str(item.scope_name or ""),
+                str(item.stage_id or ""),
+                str(item.stage_name or ""),
+                int(item.activity_start_ts or 0),
+                int(item.activity_end_ts or 0),
+                int(item.scope_start_ts or 0),
+                int(item.scope_end_ts or 0),
+                str(item.difficulty or ""),
+                1 if item.passed else 0,
+                int(item.record_ts or 0),
+                int(item.pass_time or 0),
+                int(item.first_pass_ts or 0),
+            )
+            for item in records
+            if str(item.stage_id or "").strip() and str(item.difficulty or "").strip()
+        ]
+        with self._lock:
+            try:
+                self.conn.execute("BEGIN")
+                previous = self.conn.execute(
+                    "SELECT fetched_at FROM challenge_snapshots "
+                    "WHERE role_id = ? AND server_id = ? AND family = ?",
+                    key,
+                ).fetchone()
+                if previous is not None and int(previous["fetched_at"] or 0) > current:
+                    self.conn.execute("ROLLBACK")
+                    return False
+                self.conn.execute(
+                    """
+                    INSERT INTO challenge_snapshots(
+                        role_id, server_id, family, fetched_at, last_attempt_at,
+                        last_error, failure_count, next_attempt_at, record_count
+                    ) VALUES (?, ?, ?, ?, ?, '', 0, 0, ?)
+                    ON CONFLICT(role_id, server_id, family) DO UPDATE SET
+                        fetched_at = excluded.fetched_at,
+                        last_attempt_at = excluded.last_attempt_at,
+                        last_error = '',
+                        failure_count = 0,
+                        next_attempt_at = 0,
+                        record_count = excluded.record_count
+                    """,
+                    (*key, current, current, len(rows)),
+                )
+                self.conn.execute(
+                    "DELETE FROM challenge_record_members "
+                    "WHERE role_id = ? AND server_id = ? AND family = ?",
+                    key,
+                )
+                self.conn.execute(
+                    "DELETE FROM challenge_records "
+                    "WHERE role_id = ? AND server_id = ? AND family = ?",
+                    key,
+                )
+                if rows:
+                    self.conn.executemany(
+                        """
+                        INSERT OR REPLACE INTO challenge_records(
+                            role_id, server_id, family, activity_id, activity_name,
+                            scope_id, scope_name, stage_id, stage_name,
+                            activity_start_ts, activity_end_ts,
+                            scope_start_ts, scope_end_ts, difficulty,
+                            passed, record_ts, pass_time, first_pass_ts
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        rows,
+                    )
+                    member_rows = [
+                        (
+                            key[0],
+                            key[1],
+                            key[2],
+                            str(item.stage_id or ""),
+                            str(item.difficulty or ""),
+                            int(member.slot),
+                            str(member.operator_key or ""),
+                            int(member.level or 0),
+                            int(member.potential or 0),
+                        )
+                        for item in records
+                        if str(item.stage_id or "").strip() and str(item.difficulty or "").strip()
+                        for member in item.members
+                        if str(member.operator_key or "").strip()
+                    ]
+                    if member_rows:
+                        self.conn.executemany(
+                            """
+                            INSERT OR REPLACE INTO challenge_record_members(
+                                role_id, server_id, family, stage_id, difficulty,
+                                slot, operator_key, level, potential
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            member_rows,
+                        )
+                self.conn.commit()
+                return True
+            except Exception:
+                self.conn.execute("ROLLBACK")
+                raise
+
+    def mark_challenge_failure(
+        self,
+        role_id: str,
+        server_id: str,
+        family: str,
+        *,
+        error: str = "",
+        attempted_at: int | None = None,
+        next_attempt_at: int = 0,
+    ) -> None:
+        current = int(attempted_at or time.time())
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO challenge_snapshots(
+                    role_id, server_id, family, fetched_at, last_attempt_at,
+                    last_error, failure_count, next_attempt_at, record_count
+                ) VALUES (?, ?, ?, 0, ?, ?, 1, ?, 0)
+                ON CONFLICT(role_id, server_id, family) DO UPDATE SET
+                    last_attempt_at = excluded.last_attempt_at,
+                    last_error = excluded.last_error,
+                    failure_count = challenge_snapshots.failure_count + 1,
+                    next_attempt_at = excluded.next_attempt_at
+                """,
+                (
+                    str(role_id),
+                    str(server_id),
+                    str(family),
+                    current,
+                    str(error or ""),
+                    int(next_attempt_at or 0),
+                ),
+            )
+            self.conn.commit()
+
+    def list_challenge_snapshots(
+        self,
+        role_keys: Iterable[tuple[str, str]] | None = None,
+        *,
+        family: str | None = None,
+    ) -> list[ChallengeSnapshotState]:
+        allowed = (
+            None
+            if role_keys is None
+            else {(str(role_id), str(server_id)) for role_id, server_id in role_keys}
+        )
+        if allowed is not None and not allowed:
+            return []
+        where: list[str] = []
+        params: list[object] = []
+        if family:
+            where.append("family = ?")
+            params.append(str(family))
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT role_id, server_id, family, fetched_at, last_attempt_at, "
+                "last_error, failure_count, next_attempt_at, record_count "
+                "FROM challenge_snapshots"
+                + (" WHERE " + " AND ".join(where) if where else ""),
+                tuple(params),
+            ).fetchall()
+        states: list[ChallengeSnapshotState] = []
+        for row in rows:
+            identity = (str(row["role_id"]), str(row["server_id"]))
+            if allowed is not None and identity not in allowed:
+                continue
+            states.append(
+                ChallengeSnapshotState(
+                    role_id=str(row["role_id"]),
+                    server_id=str(row["server_id"]),
+                    family=str(row["family"]),
+                    fetched_at=int(row["fetched_at"] or 0),
+                    last_attempt_at=int(row["last_attempt_at"] or 0),
+                    last_error=str(row["last_error"] or ""),
+                    failure_count=int(row["failure_count"] or 0),
+                    next_attempt_at=int(row["next_attempt_at"] or 0),
+                    record_count=int(row["record_count"] or 0),
+                )
+            )
+        return states
+
+    def list_challenge_member_rows(
+        self,
+        family: str,
+        role_keys: Iterable[tuple[str, str]] | None = None,
+    ) -> list[ChallengeMemberRow]:
+        allowed = (
+            None
+            if role_keys is None
+            else {(str(role_id), str(server_id)) for role_id, server_id in role_keys}
+        )
+        if allowed is not None and not allowed:
+            return []
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT records.role_id, records.server_id, records.activity_id,
+                       records.activity_name, records.scope_id, records.scope_name,
+                       records.stage_id, records.stage_name, records.difficulty,
+                       records.activity_start_ts, records.activity_end_ts,
+                       records.scope_start_ts, records.scope_end_ts,
+                       records.passed, records.record_ts, records.pass_time,
+                       members.slot, members.operator_key
+                FROM challenge_records AS records
+                JOIN challenge_record_members AS members
+                  ON members.role_id = records.role_id
+                 AND members.server_id = records.server_id
+                 AND members.family = records.family
+                 AND members.stage_id = records.stage_id
+                 AND members.difficulty = records.difficulty
+                WHERE records.family = ? AND records.passed = 1
+                ORDER BY records.record_ts DESC
+                """,
+                (str(family),),
+            ).fetchall()
+        return [
+            ChallengeMemberRow(
+                role_id=str(row["role_id"]),
+                server_id=str(row["server_id"]),
+                activity_id=str(row["activity_id"] or ""),
+                activity_name=str(row["activity_name"] or ""),
+                scope_id=str(row["scope_id"] or ""),
+                scope_name=str(row["scope_name"] or ""),
+                stage_id=str(row["stage_id"] or ""),
+                stage_name=str(row["stage_name"] or ""),
+                difficulty=str(row["difficulty"] or ""),
+                activity_start_ts=int(row["activity_start_ts"] or 0),
+                activity_end_ts=int(row["activity_end_ts"] or 0),
+                scope_start_ts=int(row["scope_start_ts"] or 0),
+                scope_end_ts=int(row["scope_end_ts"] or 0),
+                passed=bool(row["passed"]),
+                record_ts=int(row["record_ts"] or 0),
+                pass_time=int(row["pass_time"] or 0),
+                slot=int(row["slot"] or 0),
+                operator_key=str(row["operator_key"] or ""),
+            )
+            for row in rows
+            if allowed is None or (str(row["role_id"]), str(row["server_id"])) in allowed
+        ]
+
+    def cleanup_orphan_challenge_snapshots(self) -> int:
+        with self._lock:
+            cursor = self.conn.execute(
+                """
+                DELETE FROM challenge_snapshots
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM roles
+                    WHERE roles.role_id = challenge_snapshots.role_id
+                      AND roles.server_id = challenge_snapshots.server_id
+                )
+                """
+            )
+            self.conn.commit()
+            return int(cursor.rowcount or 0)
 
     @staticmethod
     def _role(row: sqlite3.Row) -> EndfieldRole:

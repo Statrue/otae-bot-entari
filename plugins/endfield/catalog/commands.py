@@ -63,6 +63,8 @@ ARCHIVE_PROGRESS_ALIASES = {"收集", "进度", "progress", "collected"}
 OWNERSHIP_ALIASES = {"持有率", "干员占比", "干员统计", "ownership", "ownership-rate"}
 OWNERSHIP_GROUP_ALIASES = {"群内", "本群", "当前群", "group", "guild"}
 OWNERSHIP_GLOBAL_ALIASES = {"全局", "全部", "global", "all"}
+USAGE_ALIASES = {"使用率", "上场率", "登场率", "usage", "usage-rate"}
+USAGE_REFRESH_ALIASES = {"刷新", "refresh", "update"}
 
 # 子指令规格列表（单一事实来源）：从已有别名集推导出「子指令别名 → (父命令, 规范写法, 说明)」
 SUBCOMMAND_SPECS: tuple[tuple[Iterable[str], str, str, str], ...] = (
@@ -89,6 +91,12 @@ SUBCOMMAND_SPECS: tuple[tuple[Iterable[str], str, str, str], ...] = (
         "影拓",
         "/ef 影拓 历史",
         "浏览往期主题通关总览（或 /ef 回响 历史）",
+    ),
+    (
+        USAGE_ALIASES,
+        "影拓",
+        "/ef 影拓 使用率",
+        "统计本群已绑定成员的最佳记录阵容使用率（或 /ef 回响 使用率）",
     ),
     (
         GACHA_SYNC_ALIASES,
@@ -534,6 +542,69 @@ def _split_difficulty_suffix(token: str) -> tuple[str, str]:
     return match.group("name").strip(), match.group("difficulty").strip()
 
 
+def _parse_usage_command(kind: str, parts: list[str]) -> ParsedEndfieldCommand:
+    """解析「<玩法> 使用率 ...」:范围词、难度与刷新开关各只认一次。"""
+    remaining = list(parts)
+    scope = "auto"
+    refresh = False
+    difficulty_aliases = {
+        "monument": {
+            "普通": "normal", "normal": "normal", "n": "normal",
+            "苦难": "hard", "困难": "hard", "hard": "hard", "h": "hard",
+        },
+        "war_echo": {
+            "普通": "normal", "normal": "normal", "n": "normal",
+            "困难": "hard", "hard": "hard", "h": "hard",
+            "残酷": "cruel", "苦难": "cruel", "cruel": "cruel", "c": "cruel",
+        },
+    }[kind]
+    difficulty = ""
+    terms: list[str] = []
+    for token in remaining:
+        lowered = token.casefold()
+        if lowered in USAGE_REFRESH_ALIASES:
+            if refresh:
+                return ParsedEndfieldCommand(
+                    "challenge", challenge_kind=kind, challenge_view="usage_refresh",
+                    error="刷新选项不可重复输入。",
+                )
+            refresh = True
+            continue
+        if lowered in OWNERSHIP_GROUP_ALIASES or lowered in OWNERSHIP_GLOBAL_ALIASES:
+            resolved = "group" if lowered in OWNERSHIP_GROUP_ALIASES else "global"
+            if scope != "auto" and scope != resolved:
+                return ParsedEndfieldCommand(
+                    "challenge", challenge_kind=kind, challenge_view="usage",
+                    error="统计范围仅可指定一次。",
+                )
+            scope = resolved
+            continue
+        normalized = difficulty_aliases.get(lowered)
+        if normalized is None:
+            bare, suffix = _split_difficulty_suffix(token)
+            if suffix and bare:
+                normalized = difficulty_aliases.get(suffix.casefold())
+                if normalized:
+                    token = bare
+        if normalized:
+            if difficulty and difficulty != normalized:
+                return ParsedEndfieldCommand(
+                    "challenge", challenge_kind=kind, challenge_view="usage",
+                    error="关卡难度仅可指定一项。",
+                )
+            difficulty = normalized
+            continue
+        terms.append(token)
+    return ParsedEndfieldCommand(
+        "challenge",
+        challenge_kind=kind,
+        challenge_view="usage_refresh" if refresh else "usage",
+        scope=scope,
+        challenge_terms=tuple(terms),
+        challenge_difficulty=difficulty,
+    )
+
+
 def _parse_challenge_command(kind: str, parts: list[str]) -> ParsedEndfieldCommand:
     """Parse personal challenge commands while keeping account selection explicit.
 
@@ -543,6 +614,8 @@ def _parse_challenge_command(kind: str, parts: list[str]) -> ParsedEndfieldComma
     """
     remaining = list(parts)
     account_selector = ""
+    if remaining and remaining[0].casefold() in USAGE_ALIASES:
+        return _parse_usage_command(kind, remaining[1:])
     for index, token in enumerate(remaining):
         lowered = token.casefold()
         if lowered in ACCOUNT_ALIASES or lowered.startswith(("账号=", "账户=", "account=")):
@@ -985,6 +1058,9 @@ def format_help() -> str:
             "  /ef 回响 [账号 ...] [@群友] —— 查看当期赛季星数、轮换进度及个人成绩",
             "  /ef 回响 历史 [第N页] [账号 ...] [@群友] —— 分页浏览往期赛季历史",
             "  /ef 回响 <赛季> [轮换] [关卡] [普通|困难|残酷] [账号 ...] [@群友] —— 查询特定赛季关卡挑战详情（不写关卡时显示该赛季总览）",
+            "  /ef 影拓 使用率 [主题] [关卡] [普通|苦难] [群内|全局] —— 统计本群已绑定成员的最佳记录阵容使用率",
+            "  /ef 回响 使用率 [赛季] [轮换] [关卡] [普通|困难|残酷] [群内|全局] —— 同上，统计战争回响",
+            "  /ef 影拓 使用率 刷新 | /ef 回响 使用率 刷新 —— 立即抓取快照（群管或机器人管理员），每 10 分钟也会自动补齐",
             "  群聊末尾 @群友 时查询对方绑定的主账号；未绑定时仅返回文字提示",
             "  /ef 资源流水 [账号] [日期|开始日期 结束日期|--天数 N/-d N] —— 检索源石、嵌晶玉与武库配额流水（默认最近 30 天）",
             "  /ef 资源流水 [账号] [--资源 源石|嵌晶玉|武库配额] [--类型 获取|消耗] [-a/--all] —— 按币种与变动类型筛选收支明细",

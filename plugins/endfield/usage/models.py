@@ -99,6 +99,7 @@ class UsageStageReport:
     regions: tuple[str, ...] = ()
     generated_at: int = field(default_factory=lambda: int(time()))
     snapshot_updated_at: int = 0
+    subject_label: str = ""
 
     @property
     def family_label(self) -> str:
@@ -136,6 +137,56 @@ class UsageOverviewReport:
     generated_at: int = field(default_factory=lambda: int(time()))
     snapshot_updated_at: int = 0
     latest_record_ts: int = 0
+    subject_label: str = ""
+
+    @property
+    def family_label(self) -> str:
+        return FAMILY_LABELS.get(self.family, self.family)
+
+    @property
+    def difficulty_label(self) -> str:
+        return DIFFICULTY_LABELS.get(self.difficulty, self.difficulty)
+
+
+@dataclass(frozen=True, slots=True)
+class UsageHistoryEntry:
+    """历史卡里的一期：赛季 + 轮换。"""
+
+    activity_id: str
+    activity_name: str
+    scope_id: str
+    scope_name: str
+    stage_count: int
+    done_stage_count: int
+    recorded_role_count: int
+    bound_role_count: int
+    coverage: float | None
+    latest_record_ts: int
+    scope_start_ts: int = 0
+    scope_end_ts: int = 0
+    current: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class UsageHistoryReport:
+    """跨全部期次合并后的干员总使用率。"""
+
+    family: str
+    scope: str
+    difficulty: str
+    bound_role_count: int
+    sample_count: int = 0
+    recorded_role_count: int = 0
+    period_count: int = 0
+    operators: tuple[UsageOperator, ...] = ()
+    teams: tuple[UsageTeam, ...] = ()
+    team_combo_total: int = 0
+    latest_record_ts: int = 0
+    entries: tuple[UsageHistoryEntry, ...] = ()
+    regions: tuple[str, ...] = ()
+    generated_at: int = field(default_factory=lambda: int(time()))
+    snapshot_updated_at: int = 0
+    subject_label: str = ""
 
     @property
     def family_label(self) -> str:

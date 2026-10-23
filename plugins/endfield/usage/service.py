@@ -35,6 +35,7 @@ from ..gacha.service import ROLE_TASKS, TaskAlreadyRunning
 from .models import (
     FAMILY_MONUMENT,
     FAMILY_WAR_ECHO,
+    UsageHistoryReport,
     UsageOperator,
     UsageOverviewReport,
     UsageStageKey,
@@ -680,6 +681,7 @@ class UsageStatsService:
         difficulty: str = "",
         now: int | None = None,
         locale: Any = None,
+        subject_label: str = "",
     ) -> UsageStageReport | UsageOverviewReport:
         """按用户给的词决定出单关卡卡还是当期概览卡。
 
@@ -695,7 +697,14 @@ class UsageStatsService:
         )
         if not rest:
             return self._overview_report(
-                scope, roles, family, aggregates, activity_id, scope_id, target_difficulty
+                scope,
+                roles,
+                family,
+                aggregates,
+                activity_id,
+                scope_id,
+                target_difficulty,
+                subject_label=subject_label,
             )
         try:
             stage_id = self._pick_stage(
@@ -712,6 +721,78 @@ class UsageStatsService:
             scope_id,
             target_difficulty,
             stage_id,
+            subject_label=subject_label,
+        )
+
+    # --- 历史总使用率 -----------------------------------------------------
+
+    def build_history_report(
+        self,
+        scope: str,
+        roles: Sequence[EndfieldRole],
+        family: str,
+        *,
+        terms: Sequence[str] = (),
+        difficulty: str = "",
+        now: int | None = None,
+        locale: Any = None,
+        subject_label: str = "",
+    ) -> UsageHistoryReport:
+        """把全部期次的记录并成一份干员总使用率。
+
+        terms 只用来筛期次(赛季/轮换名),不会把记录拆成一行一期。
+        """
+        now_ts = int(now or time.time())
+        _ = now_ts  # 历史口径不看当前时间，保留参数便于复用
+        roles = _challenge_roles(roles)
+        aggregates = _localized_rows(self._load_aggregates(roles, family), locale)
+        if not aggregates:
+            raise UsageUnavailableError("统计范围内还没有该玩法的挑战记录。")
+        target_difficulty = _normalize_difficulty(family, difficulty)
+        filters = tuple(str(token).strip() for token in terms if str(token).strip())
+        rows = [
+            item
+            for item in aggregates
+            if item.difficulty == target_difficulty
+            and (
+                not filters
+                or _history_matches(
+                    filters, item.activity_name, item.scope_name, item.scope_id
+                )
+            )
+        ]
+        if not rows:
+            if filters:
+                raise UsageResolutionError("没有匹配到任何期次，试试期次名或轮换名。")
+            raise UsageUnavailableError("该难度下还没有任何期次的记录。")
+
+        catalog = self._catalog_maps()
+        bound_roles = _bound_role_count(roles)
+        periods = {(item.activity_id, item.scope_id) for item in rows}
+        sample_roles = {key for item in rows for key in item.role_keys}
+        single_subject = bool(subject_label)
+        record_count = len(rows)
+        sample_count = 1 if single_subject else record_count
+        teams = _aggregate_teams(
+            rows, catalog, sample_count=1 if single_subject else record_count
+        )
+        return UsageHistoryReport(
+            family=family,
+            scope=scope,
+            difficulty=target_difficulty,
+            bound_role_count=bound_roles if not single_subject else sample_count,
+            sample_count=sample_count,
+            recorded_role_count=1 if single_subject else len(sample_roles),
+            period_count=len(periods),
+            operators=_aggregate_operators(
+                rows, catalog, sample_count=1 if single_subject else record_count
+            ),
+            teams=teams[: TEAM_LIMIT * 2],
+            team_combo_total=len(teams),
+            latest_record_ts=max((item.record_ts for item in rows), default=0),
+            regions=_regions(roles),
+            snapshot_updated_at=self._snapshot_updated_at(roles, family),
+            subject_label=subject_label,
         )
 
     def build_stage_report(
@@ -792,6 +873,8 @@ class UsageStatsService:
         scope_id: str,
         difficulty: str,
         stage_id: str,
+        *,
+        subject_label: str = "",
     ) -> UsageStageReport:
         catalog = self._catalog_maps()
         matching = [
@@ -825,13 +908,16 @@ class UsageStatsService:
             sample_count=sample_count,
             bound_role_count=bound_roles,
             coverage=(sample_count / bound_roles) if bound_roles else None,
-            insufficient=sample_count < MIN_SAMPLE_COUNT,
+            insufficient=(
+                sample_count < MIN_SAMPLE_COUNT and not subject_label
+            ),
             operators=_aggregate_operators(matching, catalog),
             teams=teams[:TEAM_LIMIT],
             team_combo_total=len(teams),
             latest_record_ts=max((item.record_ts for item in matching), default=0),
             regions=_regions(roles),
             snapshot_updated_at=self._snapshot_updated_at(roles, family),
+            subject_label=subject_label,
         )
 
     def _overview_report(
@@ -843,6 +929,8 @@ class UsageStatsService:
         activity_id: str,
         scope_id: str,
         difficulty: str,
+        *,
+        subject_label: str = "",
     ) -> UsageOverviewReport:
         catalog = self._catalog_maps()
         bound_roles = _bound_role_count(roles)
@@ -863,7 +951,9 @@ class UsageStatsService:
                     stage_id=stage_id,
                     difficulty=difficulty,
                     sample_count=len(sample_roles),
-                    insufficient=len(sample_roles) < MIN_SAMPLE_COUNT,
+                    insufficient=(
+                        len(sample_roles) < MIN_SAMPLE_COUNT and not subject_label
+                    ),
                     leads=_aggregate_operators(matching, catalog)[:3],
                     bound_role_count=bound_roles,
                 )
@@ -1270,6 +1360,24 @@ def _current_scope(scoped: Sequence[_RecordAgg], now_ts: int) -> str:
     return max(scoped, key=lambda item: (item.record_ts, item.scope_id)).scope_id
 
 
+def _history_matches(
+    filters: Sequence[str], activity_name: str, scope_name: str, scope_id: str
+) -> bool:
+    """期次过滤：每个词都要落在赛季名、轮换名或轮换 id 上。"""
+    haystacks = [
+        str(activity_name or "").casefold(),
+        str(scope_name or "").casefold(),
+        str(scope_id or "").casefold(),
+    ]
+    for token in filters:
+        needle = str(token or "").strip().casefold()
+        if not needle:
+            continue
+        if not any(needle in text or text in needle for text in haystacks if text):
+            return False
+    return True
+
+
 def _stage_order(
     aggregates: Sequence[_RecordAgg], activity_id: str, scope_id: str, difficulty: str
 ) -> list[str]:
@@ -1341,10 +1449,13 @@ def _operator_meta(
 
 
 def _aggregate_operators(
-    records: Sequence[_RecordAgg], catalog: Mapping[str, OperatorCatalogEntry]
+    records: Sequence[_RecordAgg],
+    catalog: Mapping[str, OperatorCatalogEntry],
+    *,
+    sample_count: int | None = None,
 ) -> tuple[UsageOperator, ...]:
-    sample_roles = {key for item in records for key in item.role_keys}
-    sample_count = len(sample_roles)
+    if sample_count is None:
+        sample_count = len({key for item in records for key in item.role_keys})
     used: Counter[str] = Counter()
     for item in records:
         for _slot, operator_key in item.members:
@@ -1379,9 +1490,13 @@ def _aggregate_operators(
 
 
 def _aggregate_teams(
-    records: Sequence[_RecordAgg], catalog: Mapping[str, OperatorCatalogEntry]
+    records: Sequence[_RecordAgg],
+    catalog: Mapping[str, OperatorCatalogEntry],
+    *,
+    sample_count: int | None = None,
 ) -> tuple[UsageTeam, ...]:
-    sample_count = len({key for item in records for key in item.role_keys})
+    if sample_count is None:
+        sample_count = len({key for item in records for key in item.role_keys})
     grouped: dict[frozenset[str], list[_RecordAgg]] = {}
     for item in records:
         keys = frozenset(key for _slot, key in item.members if key)

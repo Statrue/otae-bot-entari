@@ -560,13 +560,39 @@ def _parse_usage_command(kind: str, parts: list[str]) -> ParsedEndfieldCommand:
     }[kind]
     difficulty = ""
     terms: list[str] = []
+    history = False
+    page = 1
     for token in remaining:
         lowered = token.casefold()
+        if lowered in CHALLENGE_HISTORY_ALIASES:
+            if history:
+                return ParsedEndfieldCommand(
+                    "challenge", challenge_kind=kind, challenge_view="usage_history",
+                    error="历史选项不可重复输入。",
+                )
+            history = True
+            continue
+        page_match = re.fullmatch(r"(?:第\s*)?(\d+)\s*页", token)
+        if page_match is None and lowered.startswith("page"):
+            page_match = re.fullmatch(r"page[-_ ]?(\d+)", lowered)
+        if page_match is not None:
+            # 历史总使用率一次覆盖全部期次，不再分页。
+            return ParsedEndfieldCommand(
+                "challenge",
+                challenge_kind=kind,
+                challenge_view="usage_history" if history else "usage",
+                error="使用率不需要页码，历史总使用率一次给出全部期次。",
+            )
         if lowered in USAGE_REFRESH_ALIASES:
             if refresh:
                 return ParsedEndfieldCommand(
                     "challenge", challenge_kind=kind, challenge_view="usage_refresh",
                     error="刷新选项不可重复输入。",
+                )
+            if history:
+                return ParsedEndfieldCommand(
+                    "challenge", challenge_kind=kind, challenge_view="usage_history",
+                    error="历史统计不支持刷新。",
                 )
             refresh = True
             continue
@@ -595,13 +621,15 @@ def _parse_usage_command(kind: str, parts: list[str]) -> ParsedEndfieldCommand:
             difficulty = normalized
             continue
         terms.append(token)
+    view = "usage_refresh" if refresh else ("usage_history" if history else "usage")
     return ParsedEndfieldCommand(
         "challenge",
         challenge_kind=kind,
-        challenge_view="usage_refresh" if refresh else "usage",
+        challenge_view=view,
         scope=scope,
         challenge_terms=tuple(terms),
         challenge_difficulty=difficulty,
+        page=page,
     )
 
 
@@ -1060,6 +1088,8 @@ def format_help() -> str:
             "  /ef 回响 <赛季> [轮换] [关卡] [普通|困难|残酷] [账号 ...] [@群友] —— 查询特定赛季关卡挑战详情（不写关卡时显示该赛季总览）",
             "  /ef 影拓 使用率 [主题] [关卡] [普通|苦难] [群内|全局] —— 统计本群已绑定成员的最佳记录阵容使用率",
             "  /ef 回响 使用率 [赛季] [轮换] [关卡] [普通|困难|残酷] [群内|全局] —— 同上，统计战争回响",
+            "  /ef 影拓 使用率 历史 [群内|全局] —— 跨全部期次的干员总使用率（回响同理）",
+            "  /ef 影拓 使用率 @群友 —— 只看该成员的使用率，可与 历史 叠加",
             "  /ef 影拓 使用率 刷新 | /ef 回响 使用率 刷新 —— 立即抓取快照（群管或机器人管理员），每 10 分钟也会自动补齐",
             "  群聊末尾 @群友 时查询对方绑定的主账号；未绑定时仅返回文字提示",
             "  /ef 资源流水 [账号] [日期|开始日期 结束日期|--天数 N/-d N] —— 检索源石、嵌晶玉与武库配额流水（默认最近 30 天）",

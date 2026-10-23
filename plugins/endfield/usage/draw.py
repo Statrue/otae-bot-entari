@@ -1,7 +1,7 @@
 """群内关卡成员使用率统计展示层:把使用率报告渲染成 1080 宽长图。
 
-只消费 ``UsageStageReport`` / ``UsageOverviewReport``:分母、排序与覆盖率
-都由 service 给出,这里只负责版式。头像地址是 service 拼好的完整 URL,
+只消费 ``UsageStageReport`` / ``UsageOverviewReport`` / ``UsageHistoryReport``:
+分母、排序与覆盖率都由 service 给出,这里只负责版式。头像地址是 service 拼好的完整 URL,
 下载失败或为空时退成名字首字方块,卡片上不会出现 operator_key 之类的内部标识。
 """
 
@@ -22,6 +22,7 @@ from ..rendering.cards import (
 )
 from .models import (
     DIFFICULTY_LABELS,
+    UsageHistoryReport,
     UsageOperator,
     UsageOverviewReport,
     UsageStageReport,
@@ -34,7 +35,8 @@ USAGE_STATS_WIDTH = 1080
 # 截整块 .page:30px 网格留白与圆角白卡一起出图,和其他终末地卡同一外壳。
 _USAGE_SELECTOR = ".page"
 _OVERFLOW_SELECTORS = (".card", ".rank", ".team", ".stage")
-# 高度超限时排行按 8 → 6 收缩、概览按 5 → 4 关一页退让,都不静默裁行。
+# 高度超限时排行按 8 → 6 收缩(单关卡卡与历史总榜同一档)、概览按 5 → 4 关一页退让,
+# 都不静默裁行。
 _STAGE_RANK_LIMITS = (8, 6)
 _OVERVIEW_PAGE_SIZES = (5, 4)
 _TEAM_LIMIT = 3
@@ -82,6 +84,19 @@ async def draw_usage_overview(report: UsageOverviewReport) -> tuple[bytes, ...]:
     raise last_error or RuntimeError("当期使用率概览卡渲染失败")
 
 
+async def draw_usage_history(report: UsageHistoryReport) -> tuple[bytes, ...]:
+    """历史总榜卡:跨全部期次合并的干员总使用率 + 常用队伍;样本不足时降级成提示。"""
+    last_error: RuntimeError | None = None
+    for rank_limit in _STAGE_RANK_LIMITS:
+        try:
+            return (await _draw_history_page(report, rank_limit=rank_limit),)
+        except RuntimeError as exc:
+            if not is_height_limit_error(exc):
+                raise
+            last_error = exc
+    raise last_error or RuntimeError("历史总使用率卡渲染失败")
+
+
 async def _draw_stage_page(report: UsageStageReport, *, rank_limit: int) -> bytes:
     ranked = () if report.insufficient else report.operators[:rank_limit]
     teams = () if report.insufficient else report.teams[:_TEAM_LIMIT]
@@ -94,14 +109,14 @@ async def _draw_stage_page(report: UsageStageReport, *, rank_limit: int) -> byte
             f"{report.family_label} · 使用率",
             "ENDFIELD / STAGE USAGE",
             _stage_subtitle(report),
-            _SCOPE_LABELS.get(report.scope, report.scope or "群内统计"),
+            _scope_label(report.scope, report.subject_label),
         )
         + _fresh_strip(report.latest_record_ts, report.snapshot_updated_at)
         + '<div class="wrap">'
         + _samples(_stage_sample_cells(report))
         + _stage_sections(report, assets.urls, ranked=ranked, teams=teams, records=records)
         + "</div>"
-        + _footer(_footer_left(report.regions), "")
+        + _footer(_footer_left(report.regions, personal=bool(report.subject_label)), "")
     )
     prepared = PreparedCardHtml(_page(body), assets.resources, USAGE_STATS_WIDTH)
     return await _draw_gallery_catalog(
@@ -133,7 +148,7 @@ async def _draw_overview_page(
             f"{report.family_label} · 使用率总览",
             "ENDFIELD / SEASON OVERVIEW",
             _overview_subtitle(report),
-            _SCOPE_LABELS.get(report.scope, report.scope or "群内统计"),
+            _scope_label(report.scope, report.subject_label),
         )
         + _fresh_strip(
             report.latest_record_ts, report.snapshot_updated_at, tail="每关给 Top 3"
@@ -143,11 +158,46 @@ async def _draw_overview_page(
         + _sect("本期关卡")
         + blocks
         + "</div>"
-        + _footer(_footer_left(report.regions), page_note)
+        + _footer(_footer_left(report.regions, personal=bool(report.subject_label)), page_note)
     )
     prepared = PreparedCardHtml(_page(body), assets.resources, USAGE_STATS_WIDTH)
     return await _draw_gallery_catalog(
         prepared, _USAGE_SELECTOR, _OVERFLOW_SELECTORS, "usage_stats"
+    )
+
+
+async def _draw_history_page(report: UsageHistoryReport, *, rank_limit: int) -> bytes:
+    personal = bool(str(report.subject_label or "").strip())
+    # 群内口径样本太少就不出总榜;个人口径只统计一个人,样本数是 1 也照画。
+    insufficient = report.sample_count < _MIN_SAMPLES and not personal
+    ranked = () if insufficient else report.operators[:rank_limit]
+    teams = () if insufficient else report.teams[:_TEAM_LIMIT]
+    urls = _operator_urls(ranked) + _team_urls(teams)
+    await note_remote_assets(urls, namespace=REMOTE_ASSET_NAMESPACE)
+    assets = await _prepare_assets(urls, inline=False)
+    body = (
+        _head(
+            f"{report.family_label} · 历史总使用率",
+            "ENDFIELD / HISTORY TOTALS",
+            _history_subtitle(report),
+            _scope_label(report.scope, report.subject_label),
+        )
+        + _fresh_strip(
+            report.latest_record_ts,
+            report.snapshot_updated_at,
+            tail=f"合并 {report.period_count} 期",
+        )
+        + '<div class="wrap">'
+        + _samples(_history_sample_cells(report))
+        + _history_sections(
+            report, assets.urls, ranked=ranked, teams=teams, insufficient=insufficient
+        )
+        + "</div>"
+        + _footer(_footer_left(report.regions, personal=personal), "")
+    )
+    prepared = PreparedCardHtml(_page(body), assets.resources, USAGE_STATS_WIDTH)
+    return await _draw_gallery_catalog(
+        prepared, _USAGE_SELECTOR, _OVERFLOW_SELECTORS, "usage_history"
     )
 
 
@@ -185,6 +235,23 @@ def _stage_subtitle(report: UsageStageReport) -> str:
 def _overview_subtitle(report: UsageOverviewReport) -> str:
     parts = [report.scope_name, report.activity_name, report.difficulty_label]
     return " · ".join(part for part in parts if part)
+
+
+def _history_subtitle(report: UsageHistoryReport) -> str:
+    periods = f"合并 {report.period_count} 期" if report.period_count else "全部期次"
+    parts = [report.difficulty_label, periods]
+    return " · ".join(part for part in parts if part)
+
+
+def _history_sample_cells(
+    report: UsageHistoryReport,
+) -> tuple[tuple[str, str, str], ...]:
+    return (
+        ("有记录角色", str(report.recorded_role_count), ""),
+        ("绑定角色", str(report.bound_role_count), ""),
+        ("覆盖期数", str(report.period_count), ""),
+        ("记录样本", str(report.sample_count), ""),
+    )
 
 
 def _stage_sample_cells(report: UsageStageReport) -> tuple[tuple[str, str, str], ...]:
@@ -243,6 +310,37 @@ def _stage_sections(
         sections.append(_sect("常用队伍"))
         sections.append(_team_rows(teams, icons))
     return "".join(sections)
+
+
+def _history_sections(
+    report: UsageHistoryReport,
+    icons: dict[str, str],
+    *,
+    ranked: tuple[UsageOperator, ...],
+    teams: tuple[UsageTeam, ...],
+    insufficient: bool,
+) -> str:
+    sections = [_sect("干员总使用率")]
+    if insufficient:
+        sections.append(_history_insufficient_note(report))
+        return "".join(sections)
+    if ranked:
+        sections.append(_rank_rows(ranked, icons))
+        sections.append(_tail_line(report.operators[len(ranked) :]))
+    else:
+        sections.append('<div class="thin">还没有干员使用记录</div>')
+    if teams:
+        sections.append(_sect("常用队伍"))
+        sections.append(_team_rows(teams, icons))
+    return "".join(sections)
+
+
+def _history_insufficient_note(report: UsageHistoryReport) -> str:
+    need = max(1, _MIN_SAMPLES - report.sample_count)
+    return (
+        f'<div class="thin">样本不足：{report.sample_count} / {_MIN_SAMPLES}'
+        f" · 合并 {report.period_count} 期只有这些最佳记录，再攒 {need} 人才能出总榜</div>"
+    )
 
 
 def _insufficient_note(report: UsageStageReport) -> str:
@@ -461,14 +559,23 @@ def _is_stale(stamp: int) -> bool:
     return seconds > 0 and time.time() - seconds > _STALE_SECONDS
 
 
-def _footer_left(regions: tuple[str, ...]) -> str:
-    parts = ["数据来源 <b>森空岛</b>", "统计范围 <b>本群已绑定角色</b>"]
+def _footer_left(regions: tuple[str, ...], *, personal: bool = False) -> str:
+    scope_text = "该成员绑定角色" if personal else "本群已绑定角色"
+    parts = ["数据来源 <b>森空岛</b>", f"统计范围 <b>{scope_text}</b>"]
     if regions:
         labels = " / ".join(
             _REGION_LABELS.get(region, region) for region in dict.fromkeys(regions)
         )
         parts.append(f"区域 <b>{esc(labels)}</b>")
     return " · ".join(parts)
+
+
+def _scope_label(scope: str, subject: str) -> str:
+    """头部右上角标签:个人统计优先,没给就按 scope 取默认文案。"""
+    subject = str(subject or "").strip()
+    if subject:
+        return subject
+    return _SCOPE_LABELS.get(scope, scope or "群内统计")
 
 
 def _head(title: str, kicker: str, sub: str, scope: str) -> str:

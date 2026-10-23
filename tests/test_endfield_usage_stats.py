@@ -249,6 +249,139 @@ class _FakeLocale:
         return self.text(fallback)
 
 
+def test_history_report_merges_all_periods(tmp_path):
+    """历史 = 跨全部期次合并的总使用率，不是一期一行。"""
+    store = _store(tmp_path)
+    service = UsageStatsService(store, client=None)  # type: ignore[arg-type]
+    role = _role("r1")
+    _bind(store, role)
+
+    def row(activity_id, scope_id, stage_id, ts, end_ts):
+        return ChallengeRecordRow(
+            activity_id=activity_id,
+            activity_name="赛季" + activity_id,
+            scope_id=scope_id,
+            scope_name="轮换" + scope_id,
+            stage_id=stage_id,
+            stage_name="关卡" + stage_id,
+            difficulty="cruel",
+            passed=True,
+            record_ts=ts,
+            scope_end_ts=end_ts,
+            members=(ChallengeRecordMember(0, "b" * 32), ChallengeRecordMember(1, "c" * 32)),
+        )
+
+    store.replace_challenge_snapshot(
+        "r1",
+        "1",
+        FAMILY_WAR_ECHO,
+        (
+            row("1", "1", "s1", 10, 100),
+            row("1", "2", "s1", 20, 200),
+            row("2", "1", "s2", 30, 300),
+        ),
+        fetched_at=1000,
+    )
+    history = service.build_history_report(
+        "group", [role], FAMILY_WAR_ECHO, difficulty="cruel"
+    )
+    assert history.period_count == 3
+    # 历史总榜的分母是记录条数（每条最佳记录一支队伍）
+    assert history.sample_count == 3
+    assert history.recorded_role_count == 1
+    # 三期都出现过的干员，次数应该累加
+    top = {item.operator_key: item for item in history.operators}
+    assert top["b" * 32].used_count == 3
+    assert top["b" * 32].usage_rate == 1.0
+    assert history.teams and history.teams[0].count == 3
+    # entries 仍返回期次清单，但卡片不再逐期渲染
+    assert history.entries == ()
+
+
+def test_history_report_filters_periods_by_name(tmp_path):
+    """写期次名只筛期次，不改变「合并成一榜」的口径。"""
+    store = _store(tmp_path)
+    service = UsageStatsService(store, client=None)  # type: ignore[arg-type]
+    role = _role("r1")
+    _bind(store, role)
+    rows = tuple(
+        ChallengeRecordRow(
+            activity_id=activity_id,
+            activity_name=activity_name,
+            scope_id="1",
+            scope_name="轮换Ⅰ",
+            stage_id="s1",
+            stage_name="关卡一",
+            difficulty="cruel",
+            passed=True,
+            record_ts=10,
+            scope_end_ts=100,
+            members=(ChallengeRecordMember(0, "b" * 32),),
+        )
+        for activity_id, activity_name in (("1", "谵妄赛季"), ("2", "追忆赛季"))
+    )
+    store.replace_challenge_snapshot("r1", "1", FAMILY_WAR_ECHO, rows, fetched_at=1000)
+    only = service.build_history_report(
+        "group", [role], FAMILY_WAR_ECHO, difficulty="cruel", terms=("追忆赛季",)
+    )
+    assert only.period_count == 1
+    everything = service.build_history_report(
+        "group", [role], FAMILY_WAR_ECHO, difficulty="cruel"
+    )
+    assert everything.period_count == 2
+
+
+def test_history_report_personal_mode_counts_one_sample(tmp_path):
+    """@某人 + 历史：样本按 1 算，绑定人数不再是分母。"""
+    store = _store(tmp_path)
+    service = UsageStatsService(store, client=None)  # type: ignore[arg-type]
+    role = _role("r1")
+    _bind(store, role)
+    store.replace_challenge_snapshot(
+        "r1",
+        "1",
+        FAMILY_WAR_ECHO,
+        (
+            ChallengeRecordRow(
+                activity_id="1",
+                activity_name="谵妄赛季",
+                scope_id="1",
+                scope_name="谵妄轮换Ⅰ",
+                stage_id="s1",
+                stage_name="第一关",
+                difficulty="cruel",
+                passed=True,
+                record_ts=10,
+                scope_end_ts=100,
+                members=(ChallengeRecordMember(0, "b" * 32),),
+            ),
+        ),
+        fetched_at=1000,
+    )
+    personal = service.build_history_report(
+        "group",
+        [role],
+        FAMILY_WAR_ECHO,
+        difficulty="cruel",
+        subject_label="个人统计",
+    )
+    assert (personal.sample_count, personal.bound_role_count) == (1, 1)
+    assert personal.subject_label == "个人统计"
+
+
+def test_parse_usage_history_commands():
+    from plugins.endfield.catalog.commands import parse_command
+
+    plain = parse_command("影拓 使用率 历史")
+    assert (plain.challenge_view, plain.page) == ("usage_history", 1)
+    paged = parse_command("回响 使用率 历史 第2页")
+    assert paged.error.startswith("使用率不需要页码")
+    no_refresh = parse_command("回响 使用率 历史 刷新")
+    assert no_refresh.error == "历史统计不支持刷新。"
+    duplicated = parse_command("影拓 使用率 历史 历史")
+    assert duplicated.error == "历史选项不可重复输入。"
+
+
 def test_legacy_challenge_schema_upgrade_keeps_records(tmp_path):
     """老主键的库升级后要保住已有记录,不能整表清空让查询端突然"没有记录"。"""
     import sqlite3

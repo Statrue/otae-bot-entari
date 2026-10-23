@@ -243,7 +243,11 @@ from .ownership.service import (
     render_ownership_stats,
 )
 from .ownership.draw import draw_ownership_stats
-from .usage.draw import draw_usage_overview, draw_usage_stage
+from .usage.draw import (
+    draw_usage_history,
+    draw_usage_overview,
+    draw_usage_stage,
+)
 from .usage.models import (
     FAMILY_LABELS as USAGE_FAMILY_LABELS,
     UsageStageReport,
@@ -848,6 +852,14 @@ async def _handle_usage_stats(
     family_label = USAGE_FAMILY_LABELS[family]
     user_id = str(event_user_id(event))
     active_bot = bot
+    mentions = _challenge_mention_targets(event, bot)
+    if len(mentions) > 1:
+        return await matcher.finish("单次查询仅支持 @ 一位群友。")
+    if mentions and not group_chat:
+        return await matcher.finish("通过 @群友 查询使用率仅限在群聊中使用。")
+    if mentions and command.challenge_view == "usage_refresh":
+        return await matcher.finish("刷新只能对统计范围做，@群友 仅用于查看。")
+    subject_label = "个人统计" if mentions else ""
     if scope == "group" and active_bot is None:
         try:
             active_bot = get_bot()
@@ -880,6 +892,11 @@ async def _handle_usage_stats(
         roles = account_store.list_all_roles(member_ids)
     else:
         roles = account_store.list_all_roles()
+    if mentions:
+        # @群友:只看这个人绑定的角色，其余人不下场。
+        roles = account_store.list_all_roles(list(mentions))
+        if not roles:
+            return await matcher.finish("该群友暂未绑定终末地账号，无法查询使用率。")
     if not roles:
         return await matcher.finish("统计范围内还没有绑定终末地账号的成员。")
 
@@ -899,19 +916,34 @@ async def _handle_usage_stats(
 
     try:
         with cold_start_command(matcher):
-            report = await asyncio.to_thread(
-                usage_stats_service.build_report,
-                scope,
-                roles,
-                family,
-                terms=command.challenge_terms,
-                difficulty=command.challenge_difficulty,
-                locale=await _usage_challenge_locale(),
-            )
-            if isinstance(report, UsageStageReport):
-                pngs = await draw_usage_stage(report)
+            locale = await _usage_challenge_locale()
+            if command.challenge_view == "usage_history":
+                history = await asyncio.to_thread(
+                    usage_stats_service.build_history_report,
+                    scope,
+                    roles,
+                    family,
+                    terms=command.challenge_terms,
+                    difficulty=command.challenge_difficulty,
+                    locale=locale,
+                    subject_label=subject_label,
+                )
+                pngs = await draw_usage_history(history)
             else:
-                pngs = await draw_usage_overview(report)
+                report = await asyncio.to_thread(
+                    usage_stats_service.build_report,
+                    scope,
+                    roles,
+                    family,
+                    terms=command.challenge_terms,
+                    difficulty=command.challenge_difficulty,
+                    locale=locale,
+                    subject_label=subject_label,
+                )
+                if isinstance(report, UsageStageReport):
+                    pngs = await draw_usage_stage(report)
+                else:
+                    pngs = await draw_usage_overview(report)
     except UsageResolutionError as exc:
         return await matcher.finish(str(exc))
     except UsageUnavailableError:

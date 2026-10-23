@@ -350,6 +350,12 @@ docs/endfield_usage_stats_design.md  # 本文件
 - **配置类报告字段**：新增 `UsageStageReport.team_combo_total` 与 `UsageOverviewReport.recorded_role_count`，避免渲染层拿 Top N 长度冒充"队伍组合总数"。
 - **跨关去重覆盖率**：概览卡第 3 格是"有记录角色 ÷ 绑定角色"，不是单关最高覆盖率。
 
+### 16.1 首轮上线后的修正
+
+1. **中文关卡名（i18n）**：官方挑战接口会忽略 `sk-language` 直接返回英文原文（`Cycle of Phantasia Ⅱ`、`Glaiver File: Yinglung`），中文必须由 AKEData 对照回填。原来只有后台批次调用 `parse_*` 时没带 locale，English 原文被原样落库。现在：批次开跑前取一次 `get_challenge_locale()` 并随 `persist_raw` 落库；出报告时再按 `stage_id`（`ChallengeLocale.dungeon_text`）与文本反查（`ChallengeLocale.text`，EN→CN 精确映射）翻译一次，**历史行也会被就地纠正**，不必重抓。
+2. **亚服不参与**：`card/indie-hard` 与 `card/war-echoes` 只有国服接口，刷批次和统计分母都先用 `is_asia_role` 过滤，避免白白请求和把亚服的英文数据混进来。
+3. **页脚去版本号**：卡片右下角不再印 `endfield-card-v58`，只留「第 N / M 页」这类真有必要的信息。
+
 未在真实环境验证：真实 QQ 群的 @群友 路径、森空岛真实返回的字段差异、`ruff check`（`.venv` 未安装 ruff）。
 
 验证记录：

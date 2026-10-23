@@ -43,7 +43,6 @@ _RECORD_LIMIT = 5
 _MIN_SAMPLES = 3
 # 最新记录超过该时长后,时效条把时间标成金色提示陈旧。
 _STALE_SECONDS = 30 * 24 * 3600
-_CARD_VERSION = "endfield-card-v58"
 
 _SCOPE_LABELS = {"global": "全局统计", "group": "群内统计"}
 _REGION_LABELS = {"all": "总计", "cn": "国服", "asia": "亚服"}
@@ -102,7 +101,7 @@ async def _draw_stage_page(report: UsageStageReport, *, rank_limit: int) -> byte
         + _samples(_stage_sample_cells(report))
         + _stage_sections(report, assets.urls, ranked=ranked, teams=teams, records=records)
         + "</div>"
-        + _footer(_footer_left(report.regions), _CARD_VERSION)
+        + _footer(_footer_left(report.regions), "")
     )
     prepared = PreparedCardHtml(_page(body), assets.resources, USAGE_STATS_WIDTH)
     return await _draw_gallery_catalog(
@@ -125,9 +124,7 @@ async def _draw_overview_page(
     ]
     await note_remote_assets(urls, namespace=REMOTE_ASSET_NAMESPACE)
     assets = await _prepare_assets(urls, inline=False)
-    page_note = (
-        f"第 {number} / {total} 页 · {_CARD_VERSION}" if total > 1 else _CARD_VERSION
-    )
+    page_note = f"第 {number} / {total} 页" if total > 1 else ""
     blocks = "".join(_stage_block(report, stage, assets.urls) for stage in stages)
     if not blocks:
         blocks = '<div class="thin">这一期还没有可统计的关卡</div>'
@@ -514,7 +511,8 @@ def _sect(title: str, note: str = "") -> str:
 
 
 def _footer(left: str, right: str) -> str:
-    return f'<footer>{left}<span class="right">{esc(right)}</span></footer>'
+    tail = f'<span class="right">{esc(right)}</span>' if right else ""
+    return f"<footer>{left}{tail}</footer>"
 
 
 def _page(body: str) -> str:

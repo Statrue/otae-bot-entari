@@ -38,7 +38,9 @@ from plugins.endfield.usage.service import (
 )
 
 
-def _role(role_id: str, *, server_id: str = "1", qq: str = "10001") -> EndfieldRole:
+def _role(
+    role_id: str, *, server_id: str = "1", qq: str = "10001", server_name: str = ""
+) -> EndfieldRole:
     return EndfieldRole(
         id=int(role_id.strip("r") or 1),
         credential_id=1,
@@ -47,7 +49,7 @@ def _role(role_id: str, *, server_id: str = "1", qq: str = "10001") -> EndfieldR
         role_id=role_id,
         server_id=server_id,
         nickname="",
-        server_name="",
+        server_name=server_name,
         is_primary=True,
     )
 
@@ -230,6 +232,58 @@ def test_build_challenge_records_war_echo_keeps_rotation(tmp_path):
     )
     assert (cruel[0].activity_start_ts, cruel[0].scope_end_ts) == (100, 180)
     assert cruel[0].members[0].operator_key == "c" * 32
+
+
+class _FakeLocale:
+    """只实现使用率用到的两句:文本反查与关卡名。"""
+
+    def text(self, value, default=""):
+        return {
+            "Cycle of Phantasia Ⅱ": "异想赛季",
+            "Season of Phantasia": "异想轮换Ⅱ",
+        }.get(str(value), str(value or default))
+
+    def dungeon_text(self, dungeon_id, field_name, fallback=""):
+        if str(dungeon_id) == "d1" and field_name == "name":
+            return "长刃记录：应龙"
+        return self.text(fallback)
+
+
+def test_report_translates_stored_english_names(tmp_path):
+    store = _store(tmp_path)
+    _seed(store)
+    row = ChallengeRecordRow(
+        activity_id="s1",
+        activity_name="Cycle of Phantasia Ⅱ",
+        scope_id="w1",
+        scope_name="Season of Phantasia",
+        stage_id="d1",
+        stage_name="Glaiver File: Yinglung",
+        difficulty="cruel",
+        passed=True,
+        record_ts=10,
+        pass_time=200,
+        members=(ChallengeRecordMember(0, "b" * 32),),
+    )
+    store.replace_challenge_snapshot("r1", "1", FAMILY_WAR_ECHO, (row,), fetched_at=1000)
+    service = UsageStatsService(store, client=None)  # type: ignore[arg-type]
+    roles = [_role("r1")]
+    raw = service.build_report("group", roles, FAMILY_WAR_ECHO)
+    assert raw.activity_name == "Cycle of Phantasia Ⅱ"
+    localized = service.build_report(
+        "group", roles, FAMILY_WAR_ECHO, locale=_FakeLocale()
+    )
+    assert localized.activity_name == "异想赛季"
+    assert localized.scope_name == "异想轮换Ⅱ"
+    assert localized.stages[0].stage_name == "长刃记录：应龙"
+
+
+def test_asia_roles_are_excluded_from_usage_stats(tmp_path):
+    from plugins.endfield.usage.service import _challenge_roles
+
+    asia = _role("r9", server_name="asia", server_id="5")
+    kept = _challenge_roles([_role("r1"), asia])
+    assert [role.role_id for role in kept] == ["r1"]
 
 
 def test_snapshot_write_is_stale_safe(tmp_path):

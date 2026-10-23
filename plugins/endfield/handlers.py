@@ -893,6 +893,7 @@ async def _handle_usage_stats(
                 family,
                 terms=command.challenge_terms,
                 difficulty=command.challenge_difficulty,
+                locale=await _usage_challenge_locale(),
             )
             if isinstance(report, UsageStageReport):
                 pngs = await draw_usage_stage(report)
@@ -1412,6 +1413,18 @@ async def _render_challenge_cards(
         lambda: _one_page(draw_war_detail(identity, season, week, war_group, dungeon, variant=variant)),
     )
     return await _finish_pngs(matcher, rendered)
+
+
+async def _usage_challenge_locale():
+    """使用率卡片要中文关卡名;AKEData 对照取不到时降级用官方原文。"""
+    try:
+        return await get_challenge_locale(max_wait_seconds=5.0)
+    except Exception as exc:
+        logger.debug(
+            "[endfield-usage] challenge locale unavailable "
+            f"error_type={type(exc).__module__}.{type(exc).__name__}"
+        )
+        return None
 
 
 async def _piggyback_usage_snapshot(role, family: str, raw, locale) -> None:

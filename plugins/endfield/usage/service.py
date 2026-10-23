@@ -10,7 +10,7 @@ import asyncio
 import hashlib
 import time
 from collections import Counter, OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
 from loguru import logger
@@ -19,6 +19,7 @@ from ..account.challenge.models import (
     MonumentPayload,
     WarEchoPayload,
 )
+from ..account.challenge.i18n import get_challenge_locale
 from ..account.challenge.parsing import parse_monument, parse_war_echoes
 from ..account.client import EndfieldAPIError, EndfieldOfficialClient, is_asia_role
 from ..account.crypto import CredentialCipher, CredentialKeyError
@@ -366,6 +367,7 @@ class UsageStatsService:
         trigger: str = "direct",
     ) -> UsageRefreshResult:
         started = int(now or time.time())
+        roles = _challenge_roles(roles)
         self._batch_sequence += 1
         batch_id = f"{started:x}-{self._batch_sequence:x}"
         async with self._refresh_lock:
@@ -431,8 +433,9 @@ class UsageStatsService:
                     started_at=started,
                     finished_at=int(time.time()),
                 )
+            locale = await _challenge_locale()
             outcomes, stopped_early, stop_reason = await self._run_workers(
-                selected, roles, cipher, now=started, batch_id=batch_id
+                selected, roles, cipher, now=started, batch_id=batch_id, locale=locale
             )
             issue_counts: Counter[tuple[str, str]] = Counter(
                 (item.issue_key, item.issue_label) for item in outcomes if item.issue_key
@@ -466,6 +469,7 @@ class UsageStatsService:
         *,
         now: int,
         batch_id: str,
+        locale: Any = None,
     ) -> tuple[list[_RoleOutcome], bool, str]:
         by_key = _roles_by_key(roles)
         queue: asyncio.Queue[tuple[tuple[str, str], str]] = asyncio.Queue()
@@ -505,7 +509,7 @@ class UsageStatsService:
                 lock = role_locks.setdefault(key, asyncio.Lock())
                 async with lock:
                     outcome = await self._refresh_one(
-                        role, family, cipher, now=now, batch_id=batch_id
+                        role, family, cipher, now=now, batch_id=batch_id, locale=locale
                     )
                 if outcome.issue_key == "community-circuit-open":
                     stopped_early = True
@@ -531,12 +535,15 @@ class UsageStatsService:
         *,
         now: int,
         batch_id: str,
+        locale: Any = None,
     ) -> _RoleOutcome:
         try:
             async with ROLE_TASKS.claim(role):
                 token = self.store.decrypt_token(role, cipher)
                 raw = await self._fetch(role, family, token)
-                written = await self.persist_raw(role, family, raw, fetched_at=now)
+                written = await self.persist_raw(
+                    role, family, raw, locale=locale, fetched_at=now
+                )
         except TaskAlreadyRunning:
             return _RoleOutcome(
                 "skipped", issue_key="role-busy", issue_label="角色任务占用中"
@@ -639,13 +646,15 @@ class UsageStatsService:
         terms: Sequence[str] = (),
         difficulty: str = "",
         now: int | None = None,
+        locale: Any = None,
     ) -> UsageStageReport | UsageOverviewReport:
         """按用户给的词决定出单关卡卡还是当期概览卡。
 
         词只点到主题/赛季（甚至什么都没给）时出概览;点到关卡才出单关卡卡。
         """
         now_ts = int(now or time.time())
-        aggregates = self._load_aggregates(roles, family)
+        roles = _challenge_roles(roles)
+        aggregates = _localized_rows(self._load_aggregates(roles, family), locale)
         if not aggregates:
             raise UsageUnavailableError("统计范围内还没有该玩法的挑战记录。")
         activity_id, scope_id, rest, target_difficulty = self._resolve_target(
@@ -681,9 +690,11 @@ class UsageStatsService:
         terms: Sequence[str] = (),
         difficulty: str = "",
         now: int | None = None,
+        locale: Any = None,
     ) -> UsageStageReport:
         now_ts = int(now or time.time())
-        aggregates = self._load_aggregates(roles, family)
+        roles = _challenge_roles(roles)
+        aggregates = _localized_rows(self._load_aggregates(roles, family), locale)
         if not aggregates:
             raise UsageUnavailableError("统计范围内还没有该玩法的挑战记录。")
         activity_id, scope_id, rest, target_difficulty = self._resolve_target(
@@ -712,9 +723,11 @@ class UsageStatsService:
         terms: Sequence[str] = (),
         difficulty: str = "",
         now: int | None = None,
+        locale: Any = None,
     ) -> UsageOverviewReport:
         now_ts = int(now or time.time())
-        aggregates = self._load_aggregates(roles, family)
+        roles = _challenge_roles(roles)
+        aggregates = _localized_rows(self._load_aggregates(roles, family), locale)
         if not aggregates:
             raise UsageUnavailableError("统计范围内还没有该玩法的挑战记录。")
         activity_id, scope_id, _rest, target_difficulty = self._resolve_target(
@@ -1003,6 +1016,56 @@ def _family_tasks(roles: Sequence[EndfieldRole]) -> list[tuple[tuple[str, str], 
         for family in (FAMILY_MONUMENT, FAMILY_WAR_ECHO):
             tasks.append((key, family))
     return tasks
+
+
+async def _challenge_locale() -> Any:
+    """挑战关卡名需要 AKEData 的中文对照:官方响应会返回英文原文。
+
+    取不到就返回 None,调用方退回官方原文,不阻塞批次。
+    """
+    try:
+        return await get_challenge_locale(max_wait_seconds=5.0)
+    except Exception as exc:  # pragma: no cover - 网络或快照异常时只降级
+        logger.debug(
+            "[endfield-usage] challenge locale unavailable "
+            f"error_type={type(exc).__module__}.{type(exc).__name__}"
+        )
+        return None
+
+
+def _localized_rows(
+    aggregates: Sequence[_RecordAgg], locale: Any
+) -> list[_RecordAgg]:
+    """把落库时的官方原文按 AKEData 对照改成中文(旧数据也一并修)。"""
+    if locale is None:
+        return list(aggregates)
+    return [
+        replace(
+            item,
+            activity_name=_localized_name(locale, item.activity_name, ""),
+            scope_name=_localized_name(locale, item.scope_name, ""),
+            stage_name=_localized_name(locale, item.stage_name, item.stage_id),
+        )
+        for item in aggregates
+    ]
+
+
+def _localized_name(locale: Any, text: str, fallback: Any) -> str:
+    raw = str(text or "").strip()
+    try:
+        if fallback:
+            resolved = locale.dungeon_text(str(fallback), "name", raw)
+        else:
+            resolved = locale.text(raw)
+    except Exception:  # pragma: no cover - 对照表结构变动时保持原文
+        return raw
+    resolved = str(resolved or "").strip()
+    return resolved or raw
+
+
+def _challenge_roles(roles: Sequence[EndfieldRole]) -> list[EndfieldRole]:
+    """影拓丰碑与战争回响只有国服接口,亚服角色不参与统计。"""
+    return [role for role in roles if not is_asia_role(role)]
 
 
 def _roles_by_key(roles: Sequence[EndfieldRole]) -> dict[tuple[str, str], EndfieldRole]:

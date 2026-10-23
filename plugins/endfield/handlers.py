@@ -902,14 +902,21 @@ async def _handle_usage_stats(
     except UsageResolutionError as exc:
         return await matcher.finish(str(exc))
     except UsageUnavailableError:
-        hint = (
-            f"统计范围内还没有{family_label}挑战记录，请先让群友发一次 /ef "
-            + ("影拓" if family == USAGE_FAMILY_MONUMENT else "回响")
-            + "，或由群管理发送 /ef "
-            + ("影拓" if family == USAGE_FAMILY_MONUMENT else "回响")
-            + " 使用率 刷新。"
+        family_cmd = "影拓" if family == USAGE_FAMILY_MONUMENT else "回响"
+        started = usage_stats_service.request_background_refresh(
+            roles, trigger=f"auto-{scope}"
         )
-        return await matcher.finish(hint)
+        if started:
+            return await matcher.finish(
+                f"统计范围内还没有{family_label}挑战记录，已开始后台抓取"
+                f"（每批 {usage_stats_service.batch_size} 个角色，约 1 分钟）。"
+                f"稍后再发一次 /ef {family_cmd} 使用率；群管理也可以发 "
+                f"/ef {family_cmd} 使用率 刷新 立刻补一批。"
+            )
+        return await matcher.finish(
+            f"统计范围内还没有{family_label}挑战记录，请先让群友发一次 /ef {family_cmd}，"
+            f"或由群管理发送 /ef {family_cmd} 使用率 刷新。"
+        )
     except Exception as exc:
         logger.exception(f"[endfield-usage] report failed: {exc}")
         return await matcher.finish("使用率统计失败，请稍后再试。")

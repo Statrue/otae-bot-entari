@@ -249,6 +249,56 @@ class _FakeLocale:
         return self.text(fallback)
 
 
+def test_legacy_challenge_schema_upgrade_keeps_records(tmp_path):
+    """老主键的库升级后要保住已有记录,不能整表清空让查询端突然"没有记录"。"""
+    import sqlite3
+
+    path = tmp_path / "legacy.db"
+    con = sqlite3.connect(path)
+    con.executescript(
+        """
+        CREATE TABLE challenge_snapshots (
+            role_id TEXT NOT NULL, server_id TEXT NOT NULL, family TEXT NOT NULL,
+            fetched_at INTEGER NOT NULL DEFAULT 0, last_attempt_at INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT NOT NULL DEFAULT '', failure_count INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at INTEGER NOT NULL DEFAULT 0, record_count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(role_id, server_id, family)
+        );
+        CREATE TABLE challenge_records (
+            role_id TEXT NOT NULL, server_id TEXT NOT NULL, family TEXT NOT NULL,
+            activity_id TEXT NOT NULL DEFAULT '', activity_name TEXT NOT NULL DEFAULT '',
+            scope_id TEXT NOT NULL DEFAULT '', scope_name TEXT NOT NULL DEFAULT '',
+            stage_id TEXT NOT NULL, stage_name TEXT NOT NULL DEFAULT '',
+            difficulty TEXT NOT NULL, passed INTEGER NOT NULL DEFAULT 0,
+            record_ts INTEGER NOT NULL DEFAULT 0, pass_time INTEGER NOT NULL DEFAULT 0,
+            first_pass_ts INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(role_id, server_id, family, stage_id, difficulty)
+        );
+        CREATE TABLE challenge_record_members (
+            role_id TEXT NOT NULL, server_id TEXT NOT NULL, family TEXT NOT NULL,
+            stage_id TEXT NOT NULL, difficulty TEXT NOT NULL, slot INTEGER NOT NULL,
+            operator_key TEXT NOT NULL, level INTEGER NOT NULL DEFAULT 0,
+            potential INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(role_id, server_id, family, stage_id, difficulty, slot)
+        );
+        INSERT INTO challenge_snapshots VALUES('r1','1','war_echo',123,123,'',0,0,1);
+        INSERT INTO challenge_records VALUES(
+            'r1','1','war_echo','s1','谵妄赛季','k1','谵妄轮换Ⅱ','d1','野性旧事','cruel',1,100,200,0
+        );
+        """
+    )
+    con.commit()
+    con.close()
+
+    store = EndfieldStore(path)
+    stages = store.list_challenge_stage_rows(FAMILY_WAR_ECHO, {("r1", "1")})
+    assert [item.stage_name for item in stages] == ["野性旧事"]
+    # 成员表重建后为空,快照被标成过期好让下一批立刻重抓
+    assert store.list_challenge_member_rows(FAMILY_WAR_ECHO, {("r1", "1")}) == []
+    snapshots = store.list_challenge_snapshots(family=FAMILY_WAR_ECHO)
+    assert [(item.fetched_at, item.next_attempt_at) for item in snapshots] == [(0, 0)]
+
+
 def test_stage_name_drops_repeated_difficulty_suffix():
     from plugins.endfield.usage.service import _strip_difficulty
 

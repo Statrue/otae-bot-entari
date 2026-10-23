@@ -288,6 +288,8 @@ class UsageStatsService:
         )
         self.systemic_circuit_seconds = max(60, int(systemic_circuit_seconds))
         self._refresh_lock = asyncio.Lock()
+        self._auto_refresh_at = 0.0
+        self._background: set[asyncio.Task[Any]] = set()
         self._circuit_open_until = 0.0
         self._circuit_reason = ""
         self._systemic_events: list[str] = []
@@ -337,6 +339,37 @@ class UsageStatsService:
             )
             return 0
         return len([item for item in rows if item.members])
+
+    # --- 空库自愈 ---------------------------------------------------------
+
+    #: 同一秒内被多人撞到空库时,别把刷新任务排成一串。
+    AUTO_REFRESH_DEBOUNCE_SECONDS = 120.0
+
+    def request_background_refresh(
+        self, roles: Sequence[EndfieldRole], *, trigger: str = "auto-empty"
+    ) -> bool:
+        """查询发现没有记录时顺手起一次后台抓取。
+
+        没有绑定、拿不到凭据或刚好刷过就返回 False,调用方改用纯提示文案。
+        """
+        roles = _challenge_roles(roles)
+        if not roles:
+            return False
+        if time.monotonic() - self._auto_refresh_at < self.AUTO_REFRESH_DEBOUNCE_SECONDS:
+            return False
+        try:
+            cipher = CredentialCipher.from_env()
+        except CredentialKeyError:
+            return False
+        self._auto_refresh_at = time.monotonic()
+        task = asyncio.create_task(
+            self.refresh_roles(
+                roles, cipher, force=True, limit=self.batch_size, trigger=trigger
+            )
+        )
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+        return True
 
     # --- 刷新批次 ---------------------------------------------------------
 

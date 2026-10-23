@@ -503,69 +503,7 @@ class EndfieldStore:
                 ).fetchall()
             }
             if "activity_id" not in member_columns:
-                # 旧表主键少了 scope_id：同一关卡在不同轮换复用时互相覆盖，整期关卡
-                # 会被压成一条。挑战数据只是快照缓存，直接重建三表，下一批重抓即可。
-                self.conn.executescript(
-                    """
-                    DROP TABLE IF EXISTS challenge_record_members;
-                    DROP TABLE IF EXISTS challenge_records;
-                    DROP TABLE IF EXISTS challenge_snapshots;
-                    CREATE TABLE challenge_snapshots (
-                        role_id TEXT NOT NULL,
-                        server_id TEXT NOT NULL,
-                        family TEXT NOT NULL,
-                        fetched_at INTEGER NOT NULL DEFAULT 0,
-                        last_attempt_at INTEGER NOT NULL DEFAULT 0,
-                        last_error TEXT NOT NULL DEFAULT '',
-                        failure_count INTEGER NOT NULL DEFAULT 0,
-                        next_attempt_at INTEGER NOT NULL DEFAULT 0,
-                        record_count INTEGER NOT NULL DEFAULT 0,
-                        PRIMARY KEY(role_id, server_id, family)
-                    );
-                    CREATE INDEX idx_endfield_challenge_snapshot_freshness
-                        ON challenge_snapshots(family, fetched_at DESC);
-                    CREATE TABLE challenge_records (
-                        role_id TEXT NOT NULL,
-                        server_id TEXT NOT NULL,
-                        family TEXT NOT NULL,
-                        activity_id TEXT NOT NULL DEFAULT '',
-                        activity_name TEXT NOT NULL DEFAULT '',
-                        scope_id TEXT NOT NULL DEFAULT '',
-                        scope_name TEXT NOT NULL DEFAULT '',
-                        stage_id TEXT NOT NULL,
-                        stage_name TEXT NOT NULL DEFAULT '',
-                        activity_start_ts INTEGER NOT NULL DEFAULT 0,
-                        activity_end_ts INTEGER NOT NULL DEFAULT 0,
-                        scope_start_ts INTEGER NOT NULL DEFAULT 0,
-                        scope_end_ts INTEGER NOT NULL DEFAULT 0,
-                        difficulty TEXT NOT NULL,
-                        passed INTEGER NOT NULL DEFAULT 0,
-                        record_ts INTEGER NOT NULL DEFAULT 0,
-                        pass_time INTEGER NOT NULL DEFAULT 0,
-                        first_pass_ts INTEGER NOT NULL DEFAULT 0,
-                        PRIMARY KEY(role_id, server_id, family, activity_id, scope_id, stage_id, difficulty),
-                        FOREIGN KEY(role_id, server_id, family)
-                            REFERENCES challenge_snapshots(role_id, server_id, family)
-                            ON DELETE CASCADE
-                    );
-                    CREATE TABLE challenge_record_members (
-                        role_id TEXT NOT NULL,
-                        server_id TEXT NOT NULL,
-                        family TEXT NOT NULL,
-                        activity_id TEXT NOT NULL DEFAULT '',
-                        scope_id TEXT NOT NULL DEFAULT '',
-                        stage_id TEXT NOT NULL,
-                        difficulty TEXT NOT NULL,
-                        slot INTEGER NOT NULL,
-                        operator_key TEXT NOT NULL,
-                        level INTEGER NOT NULL DEFAULT 0,
-                        potential INTEGER NOT NULL DEFAULT 0,
-                        PRIMARY KEY(role_id, server_id, family, activity_id, scope_id, stage_id, difficulty, slot)
-                    );
-                    CREATE INDEX idx_endfield_challenge_member_agg
-                        ON challenge_record_members(family, stage_id, difficulty, operator_key);
-                    """
-                )
+                self._upgrade_challenge_keys()
             role_columns = {
                 str(row["name"])
                 for row in self.conn.execute("PRAGMA table_info(roles)").fetchall()
@@ -676,6 +614,99 @@ class EndfieldStore:
                 (str(key), str(value), current),
             )
             self.conn.commit()
+
+    def _upgrade_challenge_keys(self) -> None:
+        """把老主键的挑战表升级成按赛季 + 轮换区分。
+
+        老表主键少了 activity_id/scope_id,官方复用的关卡会互相覆盖。这里保留
+        已有记录(关卡清单还能用,查询端不会突然说"没有记录"),只重建成员表并
+        把快照标成过期,让下一批刷新立刻重抓成员。
+        """
+        existing = {
+            str(row["name"])
+            for row in self.conn.execute(
+                "PRAGMA table_info(challenge_records)"
+            ).fetchall()
+        }
+        wanted = (
+            "role_id", "server_id", "family", "activity_id", "activity_name",
+            "scope_id", "scope_name", "stage_id", "stage_name",
+            "activity_start_ts", "activity_end_ts", "scope_start_ts", "scope_end_ts",
+            "difficulty", "passed", "record_ts", "pass_time", "first_pass_ts",
+        )
+        select = ", ".join(
+            name if name in existing else f"0 AS {name}" if name.endswith("_ts") else f"'' AS {name}"
+            for name in wanted
+        )
+        rows = self.conn.execute(f"SELECT {select} FROM challenge_records").fetchall()
+        logger.info(
+            f"[endfield] upgrading challenge keys rows={len(rows)} "
+            f"legacy_columns={len(existing)}"
+        )
+        with self._lock:
+            try:
+                self.conn.execute("BEGIN")
+                self.conn.execute("DROP TABLE IF EXISTS challenge_record_members")
+                self.conn.execute("DROP TABLE IF EXISTS challenge_records")
+                self.conn.executescript(
+                    """
+                    CREATE TABLE challenge_records (
+                        role_id TEXT NOT NULL,
+                        server_id TEXT NOT NULL,
+                        family TEXT NOT NULL,
+                        activity_id TEXT NOT NULL DEFAULT '',
+                        activity_name TEXT NOT NULL DEFAULT '',
+                        scope_id TEXT NOT NULL DEFAULT '',
+                        scope_name TEXT NOT NULL DEFAULT '',
+                        stage_id TEXT NOT NULL,
+                        stage_name TEXT NOT NULL DEFAULT '',
+                        activity_start_ts INTEGER NOT NULL DEFAULT 0,
+                        activity_end_ts INTEGER NOT NULL DEFAULT 0,
+                        scope_start_ts INTEGER NOT NULL DEFAULT 0,
+                        scope_end_ts INTEGER NOT NULL DEFAULT 0,
+                        difficulty TEXT NOT NULL,
+                        passed INTEGER NOT NULL DEFAULT 0,
+                        record_ts INTEGER NOT NULL DEFAULT 0,
+                        pass_time INTEGER NOT NULL DEFAULT 0,
+                        first_pass_ts INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY(role_id, server_id, family, activity_id, scope_id, stage_id, difficulty),
+                        FOREIGN KEY(role_id, server_id, family)
+                            REFERENCES challenge_snapshots(role_id, server_id, family)
+                            ON DELETE CASCADE
+                    );
+                    CREATE TABLE challenge_record_members (
+                        role_id TEXT NOT NULL,
+                        server_id TEXT NOT NULL,
+                        family TEXT NOT NULL,
+                        activity_id TEXT NOT NULL DEFAULT '',
+                        scope_id TEXT NOT NULL DEFAULT '',
+                        stage_id TEXT NOT NULL,
+                        difficulty TEXT NOT NULL,
+                        slot INTEGER NOT NULL,
+                        operator_key TEXT NOT NULL,
+                        level INTEGER NOT NULL DEFAULT 0,
+                        potential INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY(role_id, server_id, family, activity_id, scope_id, stage_id, difficulty, slot)
+                    );
+                    CREATE INDEX idx_endfield_challenge_member_agg
+                        ON challenge_record_members(family, stage_id, difficulty, operator_key);
+                    """
+                )
+                if rows:
+                    self.conn.executemany(
+                        f"INSERT OR REPLACE INTO challenge_records({', '.join(wanted)}) "
+                        f"VALUES({', '.join('?' for _ in wanted)})",
+                        [tuple(row) for row in rows],
+                    )
+                # 成员表重建后为空,清掉新鲜度让下一批立刻重抓。
+                self.conn.execute(
+                    "UPDATE challenge_snapshots "
+                    "SET fetched_at = 0, next_attempt_at = 0, last_attempt_at = 0"
+                )
+                self.conn.commit()
+            except Exception:
+                self.conn.execute("ROLLBACK")
+                raise
 
     def bind_roles(
         self,

@@ -249,6 +249,16 @@ class _FakeLocale:
         return self.text(fallback)
 
 
+def test_stage_name_drops_repeated_difficulty_suffix():
+    from plugins.endfield.usage.service import _strip_difficulty
+
+    assert _strip_difficulty("野性旧事·残酷", "cruel") == "野性旧事"
+    assert _strip_difficulty("白刃穿水·困难", "hard") == "白刃穿水"
+    assert _strip_difficulty("死兽鸣吼·普通", "normal") == "死兽鸣吼"
+    # 名字本身就是难度词时不要削成空串
+    assert _strip_difficulty("残酷", "cruel") == "残酷"
+
+
 def test_report_translates_stored_english_names(tmp_path):
     store = _store(tmp_path)
     _seed(store)
@@ -481,6 +491,52 @@ def test_build_report_routes_terms_to_stage_or_overview(tmp_path):
     by_stage = service.build_report("group", roles, FAMILY_MONUMENT, terms=("主题一", "关卡二"))
     assert isinstance(by_stage, UsageStageReport)
     assert by_stage.stage_name == "关卡二"
+
+
+def test_same_stage_in_two_rotations_keeps_both(tmp_path):
+    """官方会在不同赛季/轮换复用同一个关卡 id,主键漏了 activity/scope 就会互相覆盖。"""
+    store = _store(tmp_path)
+    _seed(store)
+
+    def row(activity_id, scope_id, stage_id, stage_name, record_ts):
+        return ChallengeRecordRow(
+            activity_id=activity_id,
+            activity_name="赛季" + activity_id,
+            scope_id=scope_id,
+            scope_name="轮换" + scope_id,
+            stage_id=stage_id,
+            stage_name=stage_name,
+            difficulty="cruel",
+            passed=True,
+            record_ts=record_ts,
+            pass_time=200,
+            members=(ChallengeRecordMember(0, "b" * 32),),
+        )
+
+    shared = "s" * 32
+    store.replace_challenge_snapshot(
+        "r1",
+        "1",
+        FAMILY_WAR_ECHO,
+        (
+            row("1", "1", shared, "复用的关", 10),
+            row("1", "1", "u" * 32, "只在一轮", 11),
+            row("1", "2", shared, "复用的关", 12),
+            row("1", "2", "v" * 32, "只在二轮", 13),
+            row("2", "2", shared, "复用的关", 14),
+        ),
+        fetched_at=1000,
+    )
+    rows = store.list_challenge_stage_rows(
+        FAMILY_WAR_ECHO, {("r1", "1")}
+    )
+    identities = {(item.activity_id, item.scope_id, item.stage_id) for item in rows}
+    assert len(identities) == 5
+    service = UsageStatsService(store, client=None)  # type: ignore[arg-type]
+    overview = service.build_report(
+        "group", [_role("r1")], FAMILY_WAR_ECHO, terms=("赛季1", "轮换2")
+    )
+    assert {stage.stage_name for stage in overview.stages} == {"复用的关", "只在二轮"}
 
 
 def test_overview_keeps_stages_without_records(tmp_path):

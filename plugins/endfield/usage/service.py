@@ -1085,18 +1085,48 @@ async def _challenge_locale() -> Any:
 def _localized_rows(
     aggregates: Sequence[_RecordAgg], locale: Any
 ) -> list[_RecordAgg]:
-    """把落库时的官方原文按 AKEData 对照改成中文(旧数据也一并修)。"""
-    if locale is None:
-        return list(aggregates)
-    return [
-        replace(
-            item,
-            activity_name=_localized_name(locale, item.activity_name, ""),
-            scope_name=_localized_name(locale, item.scope_name, ""),
-            stage_name=_localized_name(locale, item.stage_name, item.stage_id),
+    """把落库时的官方原文按 AKEData 对照改成中文(旧数据也一并修)。
+
+    官方关卡名自带「·残酷」这类难度后缀,卡片另有难度标签,顺手去掉重复。
+    """
+    output: list[_RecordAgg] = []
+    for item in aggregates:
+        stage_name = item.stage_name
+        if locale is not None:
+            stage_name = _localized_name(locale, stage_name, item.stage_id)
+        output.append(
+            replace(
+                item,
+                activity_name=(
+                    item.activity_name
+                    if locale is None
+                    else _localized_name(locale, item.activity_name, "")
+                ),
+                scope_name=(
+                    item.scope_name
+                    if locale is None
+                    else _localized_name(locale, item.scope_name, "")
+                ),
+                stage_name=_strip_difficulty(stage_name, item.difficulty),
+            )
         )
-        for item in aggregates
-    ]
+    return output
+
+
+_DIFFICULTY_SUFFIXES = {
+    "normal": ("·普通", "普通"),
+    "hard": ("·困难", "·苦难", "困难", "苦难"),
+    "cruel": ("·残酷", "残酷"),
+}
+
+
+def _strip_difficulty(text: str, difficulty: str) -> str:
+    """官方关卡名末尾常自带「·残酷」,卡片另有难度标签,重复显示两次很难看。"""
+    name = str(text or "").strip()
+    for suffix in _DIFFICULTY_SUFFIXES.get(str(difficulty or ""), ()):
+        if name.endswith(suffix) and len(name) > len(suffix) + 1:
+            return name[: -len(suffix)].strip()
+    return name
 
 
 def _localized_name(locale: Any, text: str, fallback: Any) -> str:

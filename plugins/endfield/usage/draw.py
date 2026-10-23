@@ -202,7 +202,7 @@ def _stage_sample_cells(report: UsageStageReport) -> tuple[tuple[str, str, str],
 def _overview_sample_cells(
     report: UsageOverviewReport,
 ) -> tuple[tuple[str, str, str], ...]:
-    statable = sum(1 for stage in report.stages if not stage.insufficient)
+    statable = sum(1 for stage in report.stages if stage.sample_count)
     return (
         ("有记录角色", str(report.recorded_role_count), ""),
         ("绑定角色", str(report.bound_role_count), ""),

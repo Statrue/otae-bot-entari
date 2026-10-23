@@ -473,7 +473,7 @@ class EndfieldStore:
                     record_ts INTEGER NOT NULL DEFAULT 0,
                     pass_time INTEGER NOT NULL DEFAULT 0,
                     first_pass_ts INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY(role_id, server_id, family, stage_id, difficulty),
+                    PRIMARY KEY(role_id, server_id, family, activity_id, scope_id, stage_id, difficulty),
                     FOREIGN KEY(role_id, server_id, family)
                         REFERENCES challenge_snapshots(role_id, server_id, family)
                         ON DELETE CASCADE
@@ -482,18 +482,90 @@ class EndfieldStore:
                     role_id TEXT NOT NULL,
                     server_id TEXT NOT NULL,
                     family TEXT NOT NULL,
+                    activity_id TEXT NOT NULL DEFAULT '',
+                    scope_id TEXT NOT NULL DEFAULT '',
                     stage_id TEXT NOT NULL,
                     difficulty TEXT NOT NULL,
                     slot INTEGER NOT NULL,
                     operator_key TEXT NOT NULL,
                     level INTEGER NOT NULL DEFAULT 0,
                     potential INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY(role_id, server_id, family, stage_id, difficulty, slot)
+                    PRIMARY KEY(role_id, server_id, family, activity_id, scope_id, stage_id, difficulty, slot)
                 );
                 CREATE INDEX IF NOT EXISTS idx_endfield_challenge_member_agg
                     ON challenge_record_members(family, stage_id, difficulty, operator_key);
                 """
             )
+            member_columns = {
+                str(row["name"])
+                for row in self.conn.execute(
+                    "PRAGMA table_info(challenge_record_members)"
+                ).fetchall()
+            }
+            if "activity_id" not in member_columns:
+                # 旧表主键少了 scope_id：同一关卡在不同轮换复用时互相覆盖，整期关卡
+                # 会被压成一条。挑战数据只是快照缓存，直接重建三表，下一批重抓即可。
+                self.conn.executescript(
+                    """
+                    DROP TABLE IF EXISTS challenge_record_members;
+                    DROP TABLE IF EXISTS challenge_records;
+                    DROP TABLE IF EXISTS challenge_snapshots;
+                    CREATE TABLE challenge_snapshots (
+                        role_id TEXT NOT NULL,
+                        server_id TEXT NOT NULL,
+                        family TEXT NOT NULL,
+                        fetched_at INTEGER NOT NULL DEFAULT 0,
+                        last_attempt_at INTEGER NOT NULL DEFAULT 0,
+                        last_error TEXT NOT NULL DEFAULT '',
+                        failure_count INTEGER NOT NULL DEFAULT 0,
+                        next_attempt_at INTEGER NOT NULL DEFAULT 0,
+                        record_count INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY(role_id, server_id, family)
+                    );
+                    CREATE INDEX idx_endfield_challenge_snapshot_freshness
+                        ON challenge_snapshots(family, fetched_at DESC);
+                    CREATE TABLE challenge_records (
+                        role_id TEXT NOT NULL,
+                        server_id TEXT NOT NULL,
+                        family TEXT NOT NULL,
+                        activity_id TEXT NOT NULL DEFAULT '',
+                        activity_name TEXT NOT NULL DEFAULT '',
+                        scope_id TEXT NOT NULL DEFAULT '',
+                        scope_name TEXT NOT NULL DEFAULT '',
+                        stage_id TEXT NOT NULL,
+                        stage_name TEXT NOT NULL DEFAULT '',
+                        activity_start_ts INTEGER NOT NULL DEFAULT 0,
+                        activity_end_ts INTEGER NOT NULL DEFAULT 0,
+                        scope_start_ts INTEGER NOT NULL DEFAULT 0,
+                        scope_end_ts INTEGER NOT NULL DEFAULT 0,
+                        difficulty TEXT NOT NULL,
+                        passed INTEGER NOT NULL DEFAULT 0,
+                        record_ts INTEGER NOT NULL DEFAULT 0,
+                        pass_time INTEGER NOT NULL DEFAULT 0,
+                        first_pass_ts INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY(role_id, server_id, family, activity_id, scope_id, stage_id, difficulty),
+                        FOREIGN KEY(role_id, server_id, family)
+                            REFERENCES challenge_snapshots(role_id, server_id, family)
+                            ON DELETE CASCADE
+                    );
+                    CREATE TABLE challenge_record_members (
+                        role_id TEXT NOT NULL,
+                        server_id TEXT NOT NULL,
+                        family TEXT NOT NULL,
+                        activity_id TEXT NOT NULL DEFAULT '',
+                        scope_id TEXT NOT NULL DEFAULT '',
+                        stage_id TEXT NOT NULL,
+                        difficulty TEXT NOT NULL,
+                        slot INTEGER NOT NULL,
+                        operator_key TEXT NOT NULL,
+                        level INTEGER NOT NULL DEFAULT 0,
+                        potential INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY(role_id, server_id, family, activity_id, scope_id, stage_id, difficulty, slot)
+                    );
+                    CREATE INDEX idx_endfield_challenge_member_agg
+                        ON challenge_record_members(family, stage_id, difficulty, operator_key);
+                    """
+                )
             role_columns = {
                 str(row["name"])
                 for row in self.conn.execute("PRAGMA table_info(roles)").fetchall()
@@ -1767,6 +1839,8 @@ class EndfieldStore:
                             key[0],
                             key[1],
                             key[2],
+                            str(item.activity_id or ""),
+                            str(item.scope_id or ""),
                             str(item.stage_id or ""),
                             str(item.difficulty or ""),
                             int(member.slot),
@@ -1783,9 +1857,9 @@ class EndfieldStore:
                         self.conn.executemany(
                             """
                             INSERT OR REPLACE INTO challenge_record_members(
-                                role_id, server_id, family, stage_id, difficulty,
-                                slot, operator_key, level, potential
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                role_id, server_id, family, activity_id, scope_id,
+                                stage_id, difficulty, slot, operator_key, level, potential
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
                             member_rows,
                         )
@@ -1903,6 +1977,8 @@ class EndfieldStore:
                   ON members.role_id = records.role_id
                  AND members.server_id = records.server_id
                  AND members.family = records.family
+                 AND members.activity_id = records.activity_id
+                 AND members.scope_id = records.scope_id
                  AND members.stage_id = records.stage_id
                  AND members.difficulty = records.difficulty
                 WHERE records.family = ? AND records.passed = 1

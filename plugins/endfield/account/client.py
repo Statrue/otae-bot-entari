@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -16,6 +17,7 @@ from urllib.parse import urlencode
 import httpx
 from loguru import logger
 
+from otae_bot.hypergryph_captcha import CaptchaChallenge, captcha_challenge, captcha_result_body
 from otae_bot.infrastructure.http.tls import shared_ssl_context
 
 from .store import GachaRecord, RoleCandidate
@@ -160,6 +162,17 @@ class EndfieldAPIError(RuntimeError):
         self.retry_after_seconds = max(0.0, float(retry_after_seconds))
 
 
+class HypergryphCaptchaRequired(EndfieldAPIError):
+    """发送短信前官方要求先过极验；``captcha`` 是原始 ``data.captcha``。"""
+
+    def __init__(self, operation: str, code: str, message: str, challenge: CaptchaChallenge):
+        super().__init__(operation, code, message)
+        self.gt = challenge.gt
+        self.challenge = challenge.challenge
+        self.new_captcha = challenge.new_captcha
+        self.captcha = dict(challenge.raw)
+
+
 @dataclass(frozen=True, slots=True)
 class AttendanceReward:
     name: str
@@ -285,10 +298,23 @@ class EndfieldOfficialClient:
         """Return anonymous process-local counters for batch observability."""
         return {key: int(value) for key, value in self._skland_metrics.items()}
 
-    async def send_phone_code(self, phone: str) -> None:
-        await self._json_request(
-            "发送验证码", "POST", f"{AS_BASE}/general/v1/send_phone_code", json_body={"phone": phone, "type": 1}
+    async def send_phone_code(self, phone: str, *, captcha: Mapping[str, str] | None = None) -> None:
+        body: dict[str, Any] = {"phone": phone, "type": 1}
+        if captcha is not None:
+            body["captcha"] = captcha_result_body(captcha)
+        # 风控时官方回 status=1，极验参数放在 data.captcha；先认出它，其余失败照旧报错。
+        response, payload = await self._json_response(
+            "发送验证码", "POST", f"{AS_BASE}/general/v1/send_phone_code", json_body=body
         )
+        challenge = captcha_challenge(payload)
+        if challenge is not None:
+            raise HypergryphCaptchaRequired(
+                "发送验证码",
+                str(payload.get("status")),
+                str(payload.get("message") or payload.get("msg") or ""),
+                challenge,
+            )
+        self._check_json_payload("发送验证码", response, payload)
 
     async def token_by_phone_code(self, phone: str, code: str) -> str:
         payload = await self._json_request(
@@ -1120,6 +1146,26 @@ class EndfieldOfficialClient:
         allowed_statuses: set[int | str] | None = None,
         retry_network: bool = False,
     ) -> dict[str, Any]:
+        response, payload = await self._json_response(
+            operation, method, url, params=params, json_body=json_body, headers=headers,
+            content=content, retry_network=retry_network,
+        )
+        self._check_json_payload(operation, response, payload, allowed_statuses)
+        return payload
+
+    async def _json_response(
+        self,
+        operation: str,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        content: bytes | None = None,
+        retry_network: bool = False,
+    ) -> tuple[httpx.Response, dict[str, Any]]:
+        """Send one request and decode its JSON object; business codes are checked by the caller."""
         attempts = 2 if retry_network else 1
         for attempt in range(attempts):
             try:
@@ -1153,6 +1199,16 @@ class EndfieldOfficialClient:
                     retry_after_seconds=retry_after,
                 )
             raise EndfieldAPIError(operation, message="官方接口数据格式异常，请稍后重试。")
+        return response, payload
+
+    @staticmethod
+    def _check_json_payload(
+        operation: str,
+        response: httpx.Response,
+        payload: dict[str, Any],
+        allowed_statuses: set[int | str] | None = None,
+    ) -> None:
+        retry_after = _response_retry_after(response)
         code = payload.get("code")
         if code not in (None, 0, "0"):
             raise EndfieldAPIError(
@@ -1177,7 +1233,6 @@ class EndfieldOfficialClient:
                 message="官方服务响应异常，请稍后重试。",
                 retry_after_seconds=retry_after,
             )
-        return payload
 
 
 def _extract_endfield_roles(payload: dict[str, Any]) -> list[RoleCandidate]:

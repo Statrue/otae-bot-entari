@@ -37,11 +37,23 @@ from otae_bot.attendance_registry import (
     signed_outcome,
 )
 from otae_bot.group_features import feature_store, scope_from_event
+from otae_bot.hypergryph_captcha import (
+    CAPTCHA_GIVE_UP,
+    CAPTCHA_GUIDE,
+    CAPTCHA_ROUNDS,
+    CAPTCHA_TIMEOUT_SECONDS,
+    CAPTCHA_UPLOAD_FAILED,
+    CaptchaPageUploadError,
+    CaptchaPasteError,
+    parse_captcha_paste,
+    render_geetest_html,
+    upload_captcha_page,
+)
 from otae_bot.infrastructure.http.tls import ashared_ssl_context
 from otae_bot.infrastructure.rendering.help_runtime import cached_help_image
 
 from .attendance import sign_roles
-from .client import ArknightsAPIError, ArknightsClient, extract_account_token
+from .client import ArknightsAPIError, ArknightsClient, HypergryphCaptchaRequired, extract_account_token
 from .commands import (
     ACTION_ACCOUNTS,
     ACTION_ATTENDANCE,
@@ -80,6 +92,7 @@ TOKEN_GUIDE = (
 TOKEN_PROMPT = "请发送 data.content 双引号内的 Token；回复“取消”退出。"
 PHONE_PROMPT = "请输入用于鹰角账号登录的手机号；回复“取消”退出。"
 CODE_PROMPT = "验证码已发送，请输入短信验证码；回复“取消”退出。"
+CAPTCHA_PROMPT = "请发送验证页面显示的一整行结果；回复“取消”退出。"
 CANCELLED_TEXT = "绑定已取消或等待超时。"
 PRIMARY_NEEDS_SELECTOR = "请指定要设为主账号的角色：/ak 主账号 <编号|昵称|UID后四位>。"
 
@@ -203,7 +216,7 @@ async def _handle_bind(matcher, user_id: str) -> None:
     if normalized in {"1", "token", "t"}:
         account_token = await _bind_token(matcher)
     elif normalized in {"2", "短信", "手机", "sms", "phone"}:
-        account_token = await _bind_phone(matcher)
+        account_token = await _bind_phone(matcher, user_id)
     else:
         return await matcher.finish("未识别绑定方式，绑定已取消。")
     if not account_token:
@@ -246,7 +259,7 @@ async def _bind_token(matcher) -> str | None:
     return token
 
 
-async def _bind_phone(matcher) -> str | None:
+async def _bind_phone(matcher, user_id: str) -> str | None:
     phone = await _prompt_text(PHONE_PROMPT, timeout=90)
     if phone is None:
         await matcher.finish(CANCELLED_TEXT)
@@ -255,7 +268,8 @@ async def _bind_phone(matcher) -> str | None:
         await matcher.finish("手机号格式不正确，绑定已取消。")
         return None
     client = await _client_instance()
-    await client.send_phone_code(phone)
+    if not await _send_phone_code(matcher, client, user_id, phone):
+        return None
     code = await _prompt_text(CODE_PROMPT, timeout=120)
     if code is None:
         await matcher.finish(CANCELLED_TEXT)
@@ -264,6 +278,55 @@ async def _bind_phone(matcher) -> str | None:
         await matcher.finish("验证码格式不正确，绑定已取消。")
         return None
     return await client.token_by_phone_code(phone, code)
+
+
+def _bind_log(user_id: str, step: str, **fields) -> None:
+    # Steps only: never a phone number, SMS code or captcha token.
+    details = "".join(f" {key}={value}" for key, value in fields.items())
+    logger.info(f"[arknights-bind] user={user_id} step={step}{details}")
+
+
+async def _send_phone_code(matcher, client: ArknightsClient, user_id: str, phone: str) -> bool:
+    """Send the SMS code; when Hypergryph asks for a GeeTest check, let the user solve it first."""
+    captcha = None
+    for attempt in range(1, CAPTCHA_ROUNDS + 2):
+        try:
+            await client.send_phone_code(phone, captcha=captcha)
+            return True
+        except HypergryphCaptchaRequired as required:
+            _bind_log(user_id, "captcha_required", attempt=attempt)
+            if attempt > CAPTCHA_ROUNDS:
+                break
+            captcha = await _solve_captcha(matcher, user_id, required)
+            if captcha is None:
+                return False
+    _bind_log(user_id, "abort", at="captcha", reason="rounds")
+    await matcher.finish(CAPTCHA_GIVE_UP)
+    return False
+
+
+async def _solve_captcha(matcher, user_id: str, required: HypergryphCaptchaRequired) -> dict[str, str] | None:
+    html = render_geetest_html(gt=required.gt, challenge=required.challenge, new_captcha=required.new_captcha)
+    try:
+        link = await upload_captcha_page(html)
+    except CaptchaPageUploadError:
+        _bind_log(user_id, "abort", at="captcha", reason="upload")
+        await matcher.finish(CAPTCHA_UPLOAD_FAILED)
+        return None
+    _bind_log(user_id, "captcha_page_sent")
+    await matcher.send(f"{CAPTCHA_GUIDE}\n{link}")
+    paste = await _prompt_text(CAPTCHA_PROMPT, timeout=CAPTCHA_TIMEOUT_SECONDS)
+    if paste is None:
+        await matcher.finish(CANCELLED_TEXT)
+        return None
+    try:
+        captcha = parse_captcha_paste(paste)
+    except CaptchaPasteError as exc:
+        _bind_log(user_id, "abort", at="captcha", reason="format")
+        await matcher.finish(f"{exc}绑定已取消。")
+        return None
+    _bind_log(user_id, "captcha_received")
+    return captcha
 
 
 # ------------------------------------------------------------- account admin

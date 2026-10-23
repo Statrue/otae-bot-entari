@@ -31,6 +31,18 @@ from otae_bot.attendance_registry import (
     signed_outcome,
 )
 from otae_bot.group_features import feature_store, scope_from_event
+from otae_bot.hypergryph_captcha import (
+    CAPTCHA_GIVE_UP,
+    CAPTCHA_GUIDE,
+    CAPTCHA_ROUNDS,
+    CAPTCHA_TIMEOUT_SECONDS,
+    CAPTCHA_UPLOAD_FAILED,
+    CaptchaPageUploadError,
+    CaptchaPasteError,
+    parse_captcha_paste,
+    render_geetest_html,
+    upload_captcha_page,
+)
 from otae_bot.infrastructure.cache import AsyncTTLCache, CacheStats
 from otae_bot.adapters.entari import (
     ArgVal,
@@ -74,6 +86,7 @@ from .account.client import (
     CURRENCY_TYPES,
     EndfieldAPIError,
     EndfieldOfficialClient,
+    HypergryphCaptchaRequired,
     account_credential_fingerprint,
     encode_account_credential,
     decode_account_credential,
@@ -1738,7 +1751,8 @@ async def _bind_cn_account_token(matcher, qq_user_id: str) -> str | None:
             await matcher.finish("手机号格式不符合标准，绑定流程已终止。")
             return None
         _binding_log(qq_user_id, "send_code")
-        await official_client.send_phone_code(phone)
+        if not await _send_cn_phone_code(matcher, qq_user_id, phone):
+            return None
         _binding_log(qq_user_id, "code_sent")
         code = await _prompt_binding("短信验证码已下发，请输入收到的验证码，如需放弃请回复“取消”。", timeout=120, stage="code")
         if not re.fullmatch(r"\d{4,8}", code):
@@ -1759,6 +1773,50 @@ async def _bind_cn_account_token(matcher, qq_user_id: str) -> str | None:
         await matcher.finish("二维码扫码暂未开放，请回复 1 或 2 选择其他方式。" if qr else "无法识别所选绑定方式，流程已终止。")
         return None
     return encode_account_credential(account_token, ACCOUNT_PROVIDER_CN)
+
+
+async def _send_cn_phone_code(matcher, qq_user_id: str, phone: str) -> bool:
+    """Send the SMS code; when Hypergryph asks for a GeeTest check, let the user solve it first."""
+    captcha = None
+    for attempt in range(1, CAPTCHA_ROUNDS + 2):
+        try:
+            await official_client.send_phone_code(phone, captcha=captcha)
+            return True
+        except HypergryphCaptchaRequired as required:
+            _binding_log(qq_user_id, "captcha_required", attempt=attempt)
+            if attempt > CAPTCHA_ROUNDS:
+                break
+            captcha = await _solve_cn_captcha(matcher, qq_user_id, required)
+            if captcha is None:
+                return False
+    _binding_log(qq_user_id, "abort", at="captcha", reason="rounds")
+    await matcher.finish(CAPTCHA_GIVE_UP)
+    return False
+
+
+async def _solve_cn_captcha(matcher, qq_user_id: str, required: HypergryphCaptchaRequired) -> dict[str, str] | None:
+    html = render_geetest_html(gt=required.gt, challenge=required.challenge, new_captcha=required.new_captcha)
+    try:
+        link = await upload_captcha_page(html)
+    except CaptchaPageUploadError:
+        _binding_log(qq_user_id, "abort", at="captcha", reason="upload")
+        await matcher.finish(CAPTCHA_UPLOAD_FAILED)
+        return None
+    _binding_log(qq_user_id, "captcha_page_sent")
+    await matcher.send(f"{CAPTCHA_GUIDE}\n{link}")
+    paste = await _prompt_binding(
+        "请发送验证页面显示的一整行结果，如需放弃请回复“取消”。",
+        timeout=CAPTCHA_TIMEOUT_SECONDS,
+        stage="captcha",
+    )
+    try:
+        captcha = parse_captcha_paste(paste)
+    except CaptchaPasteError as exc:
+        _binding_log(qq_user_id, "abort", at="captcha", reason="format")
+        await matcher.finish(f"{exc}绑定流程已终止。")
+        return None
+    _binding_log(qq_user_id, "captcha_received")
+    return captcha
 
 
 # 暂时注释二维码绑定实现；恢复时一并取消本段注释。

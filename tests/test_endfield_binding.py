@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -7,6 +8,7 @@ from unittest import mock
 from loguru import logger
 
 import plugins.endfield.handlers as endfield
+from otae_bot import hypergryph_captcha
 from otae_bot.adapters import message_log
 from plugins.endfield.account.client import ACCOUNT_PROVIDER_CN
 from plugins.endfield.account.store import RoleCandidate
@@ -14,6 +16,14 @@ from plugins.endfield.catalog import commands as commands_module
 
 USER = "239539748"
 PHONE, CODE, TOKEN = "13812345678", "654321", "sms-account-token-secret"
+GT, CHALLENGE = "c9c4facd1a6feeb80802222a1a0b6a5e", "1d8c0f9a2b3c4d5e6f7a8b9c0d1e2f3a"
+CAPTCHA_RESULT = {
+    "geetest_challenge": CHALLENGE + "k3",
+    "geetest_validate": "5f0e3c2b1a09d8e7f6a5b4c3d2e1f0a9",
+    "geetest_seccode": "5f0e3c2b1a09d8e7f6a5b4c3d2e1f0a9|jordan",
+}
+CAPTCHA_PASTE = json.dumps(CAPTCHA_RESULT, separators=(",", ":"))
+CAPTCHA_LINK = "https://0x0.st/Hgcaptcha.html"
 ROLES = [
     RoleCandidate("b1", "1095714689", "1", "甲", "China"),
     RoleCandidate("b2", "1770431888", "1", "乙", "China"),
@@ -58,10 +68,12 @@ class BindingFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.matcher = mock.Mock(send=mock.AsyncMock(), finish=mock.AsyncMock())
         self.prompts = []
+        self.upload = mock.AsyncMock(return_value=CAPTCHA_LINK)
         for target in (
             mock.patch.object(endfield, "account_store", self.store),
             mock.patch.object(endfield, "official_client", self.client),
             mock.patch.object(endfield.ownership_stats_service, "refresh_roles", mock.AsyncMock()),
+            mock.patch.object(endfield, "upload_captcha_page", self.upload),
         ):
             self.enterContext(target)
 
@@ -93,7 +105,7 @@ class BindingFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("UID 1095714689", finished)
         self.store.bind_roles.assert_called_once()
         self.assertEqual(self.store.bind_roles.call_args.args[2], ROLES[:1])
-        self.client.send_phone_code.assert_awaited_once_with(PHONE)
+        self.client.send_phone_code.assert_awaited_once_with(PHONE, captcha=None)
         self.client.token_by_phone_code.assert_awaited_once_with(PHONE, CODE)
         # Every reply, including the phone number and code, was typed in a masked dialog.
         self.assertTrue(all(sensitive for _, sensitive in self.prompts))
@@ -151,6 +163,73 @@ class BindingFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(finished, str(error))
         self.assertIn(f"[endfield-bind] user={USER} step=failed operation=send_phone_code code=1", self.logs)
         self.assertFalse(any(PHONE in line for line in self.logs))
+
+    @staticmethod
+    def captcha_required():
+        challenge = hypergryph_captcha.CaptchaChallenge(
+            GT, CHALLENGE, True, {"gt": GT, "challenge": CHALLENGE, "success": 1, "new_captcha": True}
+        )
+        return endfield.HypergryphCaptchaRequired("发送验证码", "1", "需要人机验证", challenge)
+
+    def steps(self):
+        return [line.split(" step=", 1)[1].split(" ", 1)[0] for line in self.binding_logs()]
+
+    async def test_sms_captcha_is_solved_in_a_browser_and_the_code_is_resent_with_its_result(self):
+        self.client.send_phone_code.side_effect = [self.captcha_required(), None]
+        finished = await self.run_binding("1", "2", PHONE, CAPTCHA_PASTE, CODE, "1095714689")
+        self.assertIn("新增 1 个账号", finished)
+        self.assertEqual(
+            self.client.send_phone_code.await_args_list,
+            [mock.call(PHONE, captcha=None), mock.call(PHONE, captcha=CAPTCHA_RESULT)],
+        )
+        self.client.token_by_phone_code.assert_awaited_once_with(PHONE, CODE)
+        page = self.upload.await_args.args[0]
+        self.assertIn(GT, page)
+        self.assertIn(CHALLENGE, page)
+        self.assertNotIn(PHONE, page)
+        guide = self.matcher.send.await_args.args[0]
+        self.assertEqual(guide, f"{hypergryph_captcha.CAPTCHA_GUIDE}\n{CAPTCHA_LINK}")
+        self.assertTrue(all(sensitive for _, sensitive in self.prompts))
+        self.assertEqual(self.steps(), ["start", "region", "method", "send_code", "captcha_required",
+                                        "captcha_page_sent", "captcha_received", "code_sent", "verify",
+                                        "verified", "roles", "select", "done"])
+        self.assertIn(f"[endfield-bind] user={USER} step=captcha_required attempt=1", self.logs)
+        for line in self.logs:
+            for secret in (PHONE, PHONE[3:7], CODE, TOKEN, CAPTCHA_LINK, *CAPTCHA_RESULT.values()):
+                self.assertNotIn(secret, line)
+
+    async def test_a_second_captcha_round_is_allowed_then_binding_gives_up(self):
+        self.client.send_phone_code.side_effect = [self.captcha_required() for _ in range(3)]
+        finished = await self.run_binding("1", "2", PHONE, CAPTCHA_PASTE, CAPTCHA_PASTE)
+        self.assertEqual(finished, hypergryph_captcha.CAPTCHA_GIVE_UP)
+        self.assertEqual(self.client.send_phone_code.await_count, 3)
+        self.assertEqual(self.upload.await_count, 2)
+        self.client.token_by_phone_code.assert_not_awaited()
+        self.assertIn(f"[endfield-bind] user={USER} step=abort at=captcha reason=rounds", self.logs)
+
+    async def test_captcha_page_upload_failure_ends_binding_without_pretending_to_send(self):
+        self.client.send_phone_code.side_effect = [self.captcha_required()]
+        self.upload.side_effect = hypergryph_captcha.CaptchaPageUploadError("0x0.st:http_503")
+        finished = await self.run_binding("1", "2", PHONE)
+        self.assertEqual(finished, hypergryph_captcha.CAPTCHA_UPLOAD_FAILED)
+        self.assertIn("Token 绑定", finished)
+        self.client.send_phone_code.assert_awaited_once()
+        self.matcher.send.assert_not_awaited()
+        self.assertNotIn("code_sent", self.steps())
+        self.assertIn(f"[endfield-bind] user={USER} step=abort at=captcha reason=upload", self.logs)
+
+    async def test_an_unreadable_captcha_paste_or_a_timeout_ends_binding(self):
+        self.client.send_phone_code.side_effect = [self.captcha_required()]
+        finished = await self.run_binding("1", "2", PHONE, '{"geetest_challenge":"abc"}')
+        self.assertIn("缺少 geetest_validate、geetest_seccode", finished)
+        self.assertTrue(finished.endswith("绑定流程已终止。"))
+        self.assertIn(f"[endfield-bind] user={USER} step=abort at=captcha reason=format", self.logs)
+
+        self.client.send_phone_code.side_effect = [self.captcha_required()]
+        finished = await self.run_binding("1", "2", PHONE, None)
+        self.assertEqual(finished, "等待回复超时，绑定已取消；需要时请重新发送 /ef 绑定。")
+        self.assertIn(f"[endfield-bind] user={USER} step=timeout at=captcha", self.logs)
+        self.client.token_by_phone_code.assert_not_awaited()
 
     async def test_xhh_import_asks_for_a_phone_and_code_in_a_masked_dialog_too(self):
         seen = []

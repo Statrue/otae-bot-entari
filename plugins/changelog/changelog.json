@@ -1,15 +1,36 @@
 {
   "schema": 2,
-  "head": "56ef0d8",
+  "head": "9bf4215",
   "generated_from": {
     "first_commit": "8e1b455",
     "first_date": "2026-06-17",
     "last_date": "2026-10-26",
-    "commit_count": 380,
+    "commit_count": 381,
     "merge_commit_count": 36,
     "version_count": 50
   },
   "releases": [
+    {
+      "version": "v1.36.1",
+      "date": "2026-10-26",
+      "from": "2026-10-26",
+      "to": "2026-10-26",
+      "title": "待办清单按主线核对一遍",
+      "summary": "TODO.md 的完成状态与当前代码对齐：已完成的项补勾，部分完成的项写明现状和剩余工作，并补记计划外已上线的功能。",
+      "tags": [
+        "文档"
+      ],
+      "highlights": [
+        {
+          "kind": "docs",
+          "date": "2026-10-26",
+          "text": "TODO.md 按 v1.36.0 主线逐项核对：影拓/回响成绩查询、干员持有率、账号详情排序标为已完成；材料规划、掉落效率、群友对比、今日仪表盘、数据源健康检查和 Tibo 雷达写明已有实现与剩余工作；活动公告注明已上线；新增「已上线但不在原计划内」一节，补记随机 Wiki、图鉴体系、AI 雷达等。",
+          "commits": [
+            "9bf4215"
+          ]
+        }
+      ]
+    },
     {
       "version": "v1.36.0",
       "date": "2026-10-26",

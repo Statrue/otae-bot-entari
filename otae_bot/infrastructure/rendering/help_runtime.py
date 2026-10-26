@@ -6,8 +6,9 @@ is drawn, and reused from ``data/cache/help-cards`` afterwards. The pre-rendered
 ``assets/image/help/<name>.png`` stays as the fallback when no browser is available.
 
 Rendering goes through the shared browser in
-``otae_bot.infrastructure.rendering.browser``; the fonts are injected as route
-resources so the page never touches the network.
+``otae_bot.infrastructure.rendering.browser``. Fonts and artwork are local ``file://``
+paths the browser reads directly; routing two 8 MB fonts through ``BrowserResource`` on
+every render cost about 0.7 s and produced byte-identical output.
 """
 
 from __future__ import annotations
@@ -16,13 +17,12 @@ import asyncio
 import os
 import random
 import tempfile
-from functools import lru_cache
 from pathlib import Path
 
 from loguru import logger
 
-from otae_bot.infrastructure.rendering import help_cards
-from otae_bot.infrastructure.rendering.browser import BrowserResource, screenshot_web_element
+from otae_bot.infrastructure.rendering import art_frame, help_cards
+from otae_bot.infrastructure.rendering.browser import screenshot_web_element
 from otae_bot.paths import PROJECT_ROOT
 
 #: Runtime cache location; override with ``OTAE_HELP_CACHE_PATH``.
@@ -79,7 +79,7 @@ async def cached_help_image(
     page = find_page(page_id, pages)
     if page is None:
         return fallback
-    candidates = help_cards.ratio_candidates(page, gallery or help_cards.load_gallery(), theme)
+    candidates = help_cards.ratio_candidates(page, gallery or art_frame.shared_gallery(), theme)
     if not candidates:
         return fallback
     art = (rng or random).choice(candidates)
@@ -125,19 +125,6 @@ def _write_atomic(path: Path, content: bytes) -> None:
         raise
 
 
-@lru_cache(maxsize=8)
-def _font_bytes(path: str) -> bytes:
-    return Path(path).read_bytes()
-
-
-def _font_resources(theme: help_cards.HelpTheme) -> dict[str, BrowserResource]:
-    resources = {}
-    for _, name in theme.font_files:
-        path = (theme.font_dir / name).resolve()
-        resources[path.as_uri()] = BrowserResource(_font_bytes(str(path)), "font/ttf")
-    return resources
-
-
 async def _render(
     page: help_cards.HelpPage,
     art: help_cards.Artwork,
@@ -158,7 +145,6 @@ async def _render(
             wait_for_images=True,
             wait_for_fonts=True,
             settle_ms=0,
-            resources=_font_resources(theme),
         )
     finally:
         html_path.unlink(missing_ok=True)

@@ -7,7 +7,8 @@
 | --- | --- |
 | `scripts/help_pages.json` | 每个帮助页的标题、分栏、分区、命令和配图 |
 | `assets/image/help/art/` | 插画原图和 `gallery.json`（插画登记表） |
-| `otae_bot/infrastructure/rendering/help_cards.py` | 读取上面两份数据，生成 HTML、校验排版、写入 spec 哈希 |
+| `otae_bot/infrastructure/rendering/art_frame.py` | **同模板卡片共用**：主题 `HelpTheme`、图库、按比例选图、外框 HTML/CSS |
+| `otae_bot/infrastructure/rendering/help_cards.py` | 读取上面两份数据，生成帮助页的面板内容、校验排版、写入 spec 哈希 |
 | `scripts/render_help_cards.py` | 命令行：出图、校验、写入正式资源、检查是否过期 |
 | `otae_bot/infrastructure/rendering/help_runtime.py` | 运行时按比例挑插画、出图并缓存到 `data/cache/help-cards/` |
 | `otae_bot/help_images.py` | 比例与可见度的几何计算 |
@@ -41,7 +42,8 @@
 
 挑中的插画第一次发送时现场渲染，结果连同 spec 摘要一起写进 `data/cache/help-cards/<页面>.<插画>.png`；
 之后命中缓存直接发送。摘要对不上（改了文案、换了插画或主题参数）会自动重渲染。
-渲染走 `screenshot_web_element`，字体以路由资源注入，页面不访问网络，出图与离线管线逐像素一致。
+渲染走 `screenshot_web_element`，字体与插画都是本地 `file://` 路径，由浏览器直接读取，页面不访问网络，出图与离线管线逐像素一致。（以前字体经 `BrowserResource` 拦截注入，每张多花约 0.7 秒，出图完全相同，已去掉。）
+写入缓存前只给 PNG 加上 spec 摘要，不再用 `optimize=True` 重新压缩：那一步只省约 6% 体积，却让每张多花近 2 秒。
 同一张图并发只渲染一次。缓存目录可用环境变量 `OTAE_HELP_CACHE_PATH` 覆盖。
 渲染不可用时（没有浏览器）回退到仓库里的静态回退图。
 
@@ -134,3 +136,17 @@
 
 - 同步核对实际命令解析（如终末地的 `plugins/endfield/catalog/commands.py`）和文字版回退（`format_help()`）。
 - `tests/test_endfield.py` 会检查终末地页包含关键命令，且仅私聊的命令都带有“仅私聊”标签。
+
+
+## 同模板的其他卡片
+
+外框、主题、图库和选图规则都在 `art_frame.py`，help 与其他用同一模板的卡片（目前有 `/更新日志`）共用，
+**不要在插件里另抄一份外框或图库**，否则换插画、改配色时会不同步。
+
+- 图库：`art_frame.shared_gallery()`。`gallery.json` 一改（按修改时间判断）所有卡片立刻一起看到新插画。
+- 选图：`art_frame.candidates(高度, 图库, 主题)`，立绘窗门槛与 help 相同；高度未知时给整个图库。
+  高度要渲染后才知道的卡片（如更新日志），先随机挑一张出图，量出高度后不合格再重挑重出，
+  见 `plugins/changelog/rendering.py`。
+- 外框：`font_face_css(主题)` + `frame_css(主题, 插画, min_card_height=…)` 放进 `<style>`，
+  页面用 `frame_body(标题, subtitle_html(副标题), 插画, 面板内容, 主题)` 生成；截图选择器为 `.page`。
+  卡片只写面板内容和它的样式，类名加自己的前缀，避免和外框的 `.page`、`.card`、`.panel` 等冲突。

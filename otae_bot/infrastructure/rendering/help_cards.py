@@ -7,11 +7,13 @@ JSON files, then run ``scripts/render_help_cards.py --write``. See ``docs/help_c
 Layout: blue title banner, then a card whose backdrop is the artwork (blurred), a frosted
 panel with the commands, and a sharp "standee" window showing the same artwork. Artwork is
 only ever scaled uniformly and cropped around its focus point, never stretched.
+
+The frame, theme, gallery and artwork choice live in ``art_frame`` so other cards on the
+same template share them; they are re-exported here for existing callers.
 """
 
 from __future__ import annotations
 
-import dataclasses
 import hashlib
 import io
 import json
@@ -21,47 +23,36 @@ from html import escape
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Sequence
 
-from otae_bot.help_images import VARIANT_DIR_NAME, cover_visibility, image_ratio
+from otae_bot.help_images import VARIANT_DIR_NAME
+from otae_bot.infrastructure.rendering.art_frame import (  # noqa: F401
+    ART_DIR,
+    CARD_HEIGHT_INSET,
+    CARD_WIDTH_INSET,
+    FONT_FAMILY,
+    GALLERY_PATH,
+    PANEL_HEIGHT_INSET,
+    WINDOW_VISIBILITY_FLOOR,
+    Artwork,
+    Gallery,
+    HelpSpecError,
+    HelpTheme,
+    backdrop_ratio,
+    candidates,
+    font_face_css,
+    frame_body,
+    frame_css,
+    load_gallery,
+    subtitle_html,
+    window_ratio,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 HELP_IMAGE_DIR = PROJECT_ROOT / "assets/image/help"
-ART_DIR = HELP_IMAGE_DIR / "art"
-GALLERY_PATH = ART_DIR / "gallery.json"
 PAGES_PATH = PROJECT_ROOT / "scripts/help_pages.json"
 
 DIGEST_KEY = "otae-help-digest"
 # Bump when the HTML/CSS below changes the output, so shipped images are reported stale.
 TEMPLATE_VERSION = 4
-FONT_FAMILY = "OtaeHelpSans"
-
-
-class HelpSpecError(ValueError):
-    pass
-
-
-@dataclass(frozen=True)
-class HelpTheme:
-    page_width: int = 1325
-    min_card_height: int = 661
-    window_width: int = 240
-    max_height: int = 4000
-    accent: str = "#527fbe"
-    accent_soft: str = "#a5bcde"
-    heading_color: str = "#434343"
-    body_color: str = "#5b5b5b"
-    border_color: str = "#251e19"
-    panel_alpha: float = 0.78
-    backdrop_blur: int = 8
-    font_dir: Path = PROJECT_ROOT / "plugins/endfield/assets/fonts"
-    font_files: tuple[tuple[int, str], ...] = (
-        (500, "HarmonyOS_Sans_SC_Medium.ttf"),
-        (700, "HarmonyOS_Sans_SC_Bold.ttf"),
-    )
-
-    def digest_fields(self) -> dict[str, Any]:
-        values = dataclasses.asdict(self)
-        values.pop("font_dir")
-        return values
 
 
 @dataclass(frozen=True)
@@ -90,34 +81,6 @@ class HelpPage:
     footnote: str = ""
     art: tuple[str, ...] = ()
     raw: dict[str, Any] = field(default_factory=dict, compare=False, repr=False)
-
-
-@dataclass(frozen=True)
-class Artwork:
-    id: str
-    path: Path
-    focus: tuple[float, float] = (0.5, 0.3)
-    backdrop_focus: tuple[float, float] | None = None
-    credit: str = ""
-    raw: dict[str, Any] = field(default_factory=dict, compare=False, repr=False)
-
-    def sha256(self) -> str:
-        return hashlib.sha256(self.path.read_bytes()).hexdigest()
-
-
-@dataclass(frozen=True)
-class Gallery:
-    artworks: dict[str, Artwork]
-    default: tuple[str, ...]
-
-    def resolve(self, page: HelpPage) -> tuple[Artwork, ...]:
-        ids = page.art or self.default
-        missing = [art_id for art_id in ids if art_id not in self.artworks]
-        if missing:
-            raise HelpSpecError(f"page {page.id!r} uses unknown art {missing}; add them to gallery.json")
-        if not ids:
-            raise HelpSpecError(f"page {page.id!r} has no art and gallery.json has no default")
-        return tuple(self.artworks[art_id] for art_id in ids)
 
 
 @dataclass(frozen=True)
@@ -200,54 +163,8 @@ def load_pages(path: Path = PAGES_PATH) -> list[HelpPage]:
     return pages
 
 
-def _focus(value: Any, fallback: tuple[float, float] | None) -> tuple[float, float] | None:
-    if value is None:
-        return fallback
-    x, y = (float(part) for part in value)
-    if not (0 <= x <= 1 and 0 <= y <= 1):
-        raise HelpSpecError(f"art focus must be fractions between 0 and 1: {value!r}")
-    return x, y
-
-
-def load_gallery(path: Path = GALLERY_PATH) -> Gallery:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    artworks: dict[str, Artwork] = {}
-    for raw in data.get("art") or ():
-        art_id = _text(raw.get("id"))
-        if not art_id or not re.fullmatch(r"[A-Za-z0-9_-]+", art_id):
-            raise HelpSpecError(f"art id must be letters, digits, '-' or '_': {raw!r}")
-        if art_id in artworks:
-            raise HelpSpecError(f"duplicate art id: {art_id!r}")
-        art_path = path.parent / _text(raw.get("file"))
-        if not art_path.is_file():
-            raise HelpSpecError(f"art {art_id!r} file not found: {art_path}")
-        artworks[art_id] = Artwork(
-            id=art_id,
-            path=art_path,
-            focus=_focus(raw.get("focus"), (0.5, 0.3)),
-            backdrop_focus=_focus(raw.get("backdrop_focus"), None),
-            credit=_text(raw.get("credit")),
-            raw=raw,
-        )
-    default = data.get("default") or ()
-    return Gallery(artworks, (default,) if isinstance(default, str) else tuple(default))
-
-
 # ---------------------------------------------------------------------------
 # Artwork choice by aspect ratio
-
-#: The standee window is the sharp part of the card, so it is the only gate: an artwork
-#: stays a candidate while at least this much of it survives into the window. The blurred
-#: backdrop sits behind a frosted panel and tolerates heavy cropping, so it never filters -
-#: it only orders the pool, best match first.
-WINDOW_VISIBILITY_FLOOR = 0.15
-
-#: Card metrics from the stylesheet below: `.card` is inset from `.page`, and `.panel`
-#: is inset from `.card` again. Keep in sync with the CSS.
-CARD_WIDTH_INSET = 30
-CARD_HEIGHT_INSET = 100
-PANEL_HEIGHT_INSET = 72
-
 
 def page_height(page: HelpPage, theme: HelpTheme = HelpTheme()) -> int:
     """Rendered height of a page, read from its shipped PNG.
@@ -262,16 +179,6 @@ def page_height(page: HelpPage, theme: HelpTheme = HelpTheme()) -> int:
         with Image.open(path) as image:
             return image.height
     return theme.min_card_height + CARD_HEIGHT_INSET
-
-
-def backdrop_ratio(height: int, theme: HelpTheme = HelpTheme()) -> float:
-    """Aspect ratio of the blurred backdrop box."""
-    return (theme.page_width - CARD_WIDTH_INSET) / max(1, height - CARD_HEIGHT_INSET)
-
-
-def window_ratio(height: int, theme: HelpTheme = HelpTheme()) -> float:
-    """Aspect ratio of the sharp standee window."""
-    return theme.window_width / max(1, height - CARD_HEIGHT_INSET - PANEL_HEIGHT_INSET)
 
 
 def ratio_candidates(
@@ -291,20 +198,7 @@ def ratio_candidates(
     The order is by backdrop match so the result is deterministic and the best-fitting
     artwork comes first; the caller draws uniformly from the pool.
     """
-    height = page_height(page, theme)
-    backdrop = backdrop_ratio(height, theme)
-    window = window_ratio(height, theme)
-    scored = [
-        (
-            cover_visibility(image_ratio(str(art.path)), backdrop),
-            cover_visibility(image_ratio(str(art.path)), window),
-            art,
-        )
-        for art in gallery.artworks.values()
-    ]
-    scored.sort(key=lambda row: (-row[0], row[2].id))
-    usable = [row for row in scored if row[1] >= WINDOW_VISIBILITY_FLOOR] or scored
-    return tuple(row[2] for row in usable)
+    return candidates(page_height(page, theme), gallery, theme)
 
 
 # ---------------------------------------------------------------------------
@@ -370,18 +264,6 @@ def orphan_variants(targets: Sequence[RenderTarget], help_dir: Path = HELP_IMAGE
 # HTML
 
 
-def _object_position(focus: tuple[float, float]) -> str:
-    return f"{focus[0] * 100:.1f}% {focus[1] * 100:.1f}%"
-
-
-def _dots(color: str) -> str:
-    circles = "".join(
-        f'<circle cx="{column * 16 + 3 + (3 - row) * 8}" cy="{row * 12 + 3}" r="3"/>'
-        for row in range(4) for column in range(10)
-    )
-    return f'<svg class="dots" width="174" height="42" viewBox="0 0 174 42" fill="{color}">{circles}</svg>'
-
-
 def _item_html(item: HelpItem) -> str:
     badge = f'<span class="badge">{escape(item.badge)}</span>' if item.badge else ""
     # If example is set separately, don't duplicate raw example string inside the inline description
@@ -415,47 +297,16 @@ def _section_html(section: HelpSection) -> str:
     )
 
 
-def font_face_css(theme: HelpTheme) -> str:
-    return "".join(
-        f'@font-face{{font-family:"{FONT_FAMILY}";font-weight:{weight};'
-        f'src:url("{(theme.font_dir / name).resolve().as_uri()}") format("truetype")}}'
-        for weight, name in theme.font_files
-    )
-
-
 def render_html(page: HelpPage, art: Artwork, theme: HelpTheme = HelpTheme()) -> str:
-    card_width = theme.page_width - 30
     columns = "".join(
         f'<div class="col">{"".join(_section_html(section) for section in column)}</div>'
         for column in page.columns
     )
-    art_uri = art.path.resolve().as_uri()
-    subtitle = f'<span class="subtitle" data-fit>{escape(page.subtitle)}</span>' if page.subtitle else ""
     footnote = f'<p class="foot" data-fit>{escape(page.footnote)}</p>' if page.footnote else ""
     t = theme
     return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>{escape(page.title)}</title><style>
 {font_face_css(t)}
-*{{box-sizing:border-box;margin:0;padding:0}}
-html,body{{background:#fff}}
-body{{font-family:"{FONT_FAMILY}",sans-serif;font-synthesis:none}}
-.page{{width:{t.page_width}px;padding:17px 13px 16px 17px;background:#fff}}
-.banner{{position:relative;height:52px;border-radius:21px;background:{t.accent}}}
-.titles{{position:absolute;left:32px;top:0;height:52px;display:flex;align-items:baseline;gap:16px;
-  padding-top:9px;white-space:nowrap}}
-.titles h1{{font-size:30px;line-height:34px;font-weight:700;letter-spacing:.5px;color:#fff}}
-.subtitle{{font-size:18px;font-weight:500;color:rgba(255,255,255,.86)}}
-.dots{{position:absolute;right:166px;top:5px}}
-.pill{{position:absolute;right:23px;top:7px;width:143px;height:36px;border-radius:18px;background:#fff}}
-.card{{position:relative;margin-top:15px;width:{card_width}px;min-height:{t.min_card_height}px;display:flex;gap:22px;
-  border:2px solid {t.border_color};border-radius:24px;overflow:hidden;background:#b9c3c0;padding:38px 34px 30px 37px}}
-.backdrop{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
-  object-position:{_object_position(art.backdrop_focus or art.focus)};
-  filter:blur({t.backdrop_blur}px);transform:scale(1.06)}}
-.panel{{position:relative;flex:1;min-width:0;display:flex;flex-direction:column;min-height:{t.min_card_height - 72}px;
-  border-radius:24px;background:rgba(255,255,255,{t.panel_alpha});padding:34px 32px 18px 36px}}
-.window{{position:relative;flex:0 0 {t.window_width}px;border-radius:24px;overflow:hidden;
-  border:3px solid rgba(255,255,255,.9);box-shadow:0 6px 18px rgba(37,30,25,.28)}}
-.window img{{display:block;width:100%;height:100%;object-fit:cover;object-position:{_object_position(art.focus)}}}
+{frame_css(t, art)}
 .cols{{display:grid;grid-template-columns:repeat({max(1, len(page.columns))},minmax(0,1fr));column-gap:28px}}
 .col{{min-width:0}}
 section+section{{margin-top:20px}}
@@ -476,12 +327,7 @@ section+section{{margin-top:20px}}
   font-size:17px;line-height:24px;font-weight:500;color:#6b6b6b;overflow-wrap:anywhere;text-wrap:pretty}}
 .foot{{margin-top:auto;padding-top:12px;text-align:right;font-size:18px;line-height:22px;font-weight:500;
   color:{t.body_color};overflow-wrap:anywhere}}
-</style></head><body><div class="page">
-<div class="banner"><div class="titles"><h1 data-fit>{escape(page.title)}</h1>{subtitle}</div>{_dots(t.accent_soft)}<div class="pill"></div></div>
-<div class="card"><img class="backdrop" alt="backdrop" src="{art_uri}">
-<div class="panel"><div class="cols">{columns}</div>{footnote}</div>
-<div class="window"><img alt="{escape(art.id)}" src="{art_uri}"></div></div>
-</div></body></html>"""
+</style></head>{frame_body(page.title, subtitle_html(page.subtitle), art, f'<div class="cols">{columns}</div>{footnote}', t)}"""
 
 
 # ---------------------------------------------------------------------------
@@ -551,7 +397,8 @@ def finalize_png(content: bytes, digest: str) -> bytes:
     info.add_text(DIGEST_KEY, digest)
     with Image.open(io.BytesIO(content)) as image:
         buffer = io.BytesIO()
-        image.convert("RGB").save(buffer, format="PNG", optimize=True, pnginfo=info)
+        # 不用 optimize=True：它只省约 6% 体积，却让每张多花近 2 秒。
+        image.convert("RGB").save(buffer, format="PNG", pnginfo=info)
     return buffer.getvalue()
 
 

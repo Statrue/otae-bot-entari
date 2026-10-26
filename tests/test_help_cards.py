@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from otae_bot.help_images import cover_visibility, image_ratio  # noqa: E402
-from otae_bot.infrastructure.rendering import help_cards, help_runtime  # noqa: E402
+from otae_bot.infrastructure.rendering import art_frame, help_cards, help_runtime  # noqa: E402
 
 RERENDER = "run: python scripts/render_help_cards.py --write"
 
@@ -315,6 +315,57 @@ class HelpRuntimeCacheTests(unittest.IsolatedAsyncioTestCase):
             os.environ.pop(help_runtime.CACHE_PATH_ENV, None)
             self.assertEqual(help_runtime.cache_dir(),
                              help_runtime.PROJECT_ROOT / help_runtime.DEFAULT_CACHE_PATH)
+
+
+class SharedFrameTests(unittest.TestCase):
+    """Help and every card on the same template draw from one gallery through one frame."""
+
+    def test_shared_gallery_reloads_when_the_file_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            Image.new("RGB", (30, 40), "white").save(root / "a.png")
+            Image.new("RGB", (40, 30), "white").save(root / "b.png")
+            gallery = root / "gallery.json"
+            gallery.write_text(json.dumps({"art": [{"id": "a", "file": "a.png"}]}), encoding="utf-8")
+            self.assertEqual(set(art_frame.shared_gallery(gallery).artworks), {"a"})
+            gallery.write_text(
+                json.dumps({"art": [{"id": "a", "file": "a.png"}, {"id": "b", "file": "b.png"}]}),
+                encoding="utf-8",
+            )
+            stamp = gallery.stat().st_mtime_ns + 1_000_000
+            os.utime(gallery, ns=(stamp, stamp))
+            self.assertEqual(set(art_frame.shared_gallery(gallery).artworks), {"a", "b"})
+
+    def test_help_runtime_and_changelog_use_the_shared_gallery(self):
+        from plugins.changelog import rendering as changelog_rendering
+
+        shared = art_frame.shared_gallery()
+        self.assertIs(help_cards.load_gallery, art_frame.load_gallery)
+        self.assertEqual(
+            {art.id for art in changelog_rendering._candidates(None)}, set(shared.artworks)
+        )
+        page = help_cards.load_pages()[0]
+        self.assertEqual(
+            {art.id for art in help_cards.ratio_candidates(page, shared)},
+            {art.id for art in art_frame.candidates(help_cards.page_height(page), shared)},
+        )
+
+    def test_help_and_changelog_render_the_same_frame(self):
+        from plugins.changelog import presentation as changelog_views
+        from plugins.changelog import rendering as changelog_rendering
+
+        theme = help_cards.HelpTheme()
+        art = art_frame.shared_gallery().artworks["cafe"]
+        help_html = help_cards.render_html(help_cards.load_pages()[0], art, theme)
+        changelog_html = changelog_rendering.page_html(changelog_views.help_pages()[0], art)
+        self.assertIn(art_frame.frame_css(theme, art), help_html)
+        self.assertIn(
+            art_frame.frame_css(theme, art, min_card_height=changelog_rendering.MIN_CARD_HEIGHT),
+            changelog_html,
+        )
+        standee = f'<div class="window"><img alt="cafe" src="{art.path.resolve().as_uri()}"></div>'
+        self.assertIn(standee, help_html)
+        self.assertIn(standee, changelog_html)
 
 
 if __name__ == "__main__":

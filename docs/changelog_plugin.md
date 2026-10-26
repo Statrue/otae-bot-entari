@@ -151,7 +151,7 @@ git log ──► scripts/generate_changelog.py ──► plugins/changelog/chan
                     (dataclass + 校验)              (纯文本降级)                (已转义 HTML 片段)
                                                                                       │
                                                                               rendering.py + assets/card.css
-                                                                                (离线 HTML/CSS → PNG)
+                                                                          (help 同款外框，离线 HTML/CSS → PNG)
                                                                                       │
                                                                                  handlers.py
 ```
@@ -171,7 +171,7 @@ git log ──► scripts/generate_changelog.py ──► plugins/changelog/chan
 | `models.py` | 只读数据模型与校验（`Changelog` / `Release` / `Highlight`） |
 | `formatters.py` | 纯文本渲染，图片投递失败时的降级内容 |
 | `presentation.py` | 已转义的结构化 HTML 片段（`ChangelogPage` / `ChangelogReply`） |
-| `rendering.py` + `assets/card.css` | 离线 HTML/CSS → PNG，复用共享浏览器渲染器 |
+| `rendering.py` + `assets/card.css` | help 同款外框、随机插画，离线 HTML/CSS → PNG，复用共享浏览器渲染器 |
 | `handlers.py` | 命令入口：解析参数、取数据、出图、降级 |
 
 `handlers.py` 不在 import 期读 `.env`、不发网络请求、不注册定时任务，
@@ -185,11 +185,24 @@ git log ──► scripts/generate_changelog.py ──► plugins/changelog/chan
 
 ## 卡片风格
 
-与雷达卡片共用「樱色留白」配色与版式：带粉的暖灰底、深墨正文、胭脂色数据、朱红短线。
-820 px 画布按 2x 渲染，字号按手机阅读定。类名统一加 `cl-` 前缀，避免两套卡片样式互相污染。
-字体用仓库内的 MiSans Regular 与 Bold，base64 内嵌，渲染全程零联网，CSP 为 `default-src 'none'`。
+与 help 卡片同一套外框：蓝色横幅、插画虚化底、磨砂面板、右侧插画立牌，横幅右侧的白色胶囊留空。
+外框、主题、图库与选图规则直接调用 `otae_bot/infrastructure/rendering/art_frame.py`，与 help 共用一份（见 `docs/help_cards.md`「同模板的其他卡片」），`assets/card.css` 只写面板内容。
+主色、页宽（1325 px）、立牌宽度、字体与模糊半径都从 `art_frame.HelpTheme` 读取，
+help 改配色时更新日志跟着变；只有最小卡片高度单独定为 460 px，内容短的页面不会空出一大块。
+按 1x 渲染，与 help 一致。面板内容的类名统一加 `cl-` 前缀，避免与外框的 `.page`、`.card`、`.panel` 等冲突。
 
-版本页按类型分组、连续编号；多日版本的文本降级会在每条更新后注明日期。
+插画和 help 一样从 `art_frame.shared_gallery()`（即 `assets/image/help/art/gallery.json`）**每次随机挑**。立牌能露出
+多少主体取决于卡片高度，而高度要渲染完才知道，所以 `rendering.render_page` 先随机挑一张出图，
+量出高度后，若这张在立牌里露出的比例低于 `art_frame.WINDOW_VISIBILITY_FLOOR`，就从合适的
+插画里重挑一张再出一次；量到的高度按页面内容记在内存里，同一张卡片下次直接按它挑，不再重出。
+
+字体（HarmonyOS Sans SC Medium / Bold）与插画都是仓库里的本地文件，浏览器直接按 `file://` 读取，
+渲染全程零联网；CSP 为 `default-src 'none'`，只对字体与图片放行 `file:`。这里刻意不走
+`BrowserResource` 拦截：两份 8 MB 字体每次经拦截传给浏览器，单张要多花约 0.6 秒。
+
+版本页按类型分组、连续编号，更新达到 3 条时分两栏排；目录与检索都是两栏，每行带版本号、日期、
+标签、标题、两行摘要与各类型条数；统计页左边是各版本更新条数柱状图（最多的一版标深色），
+右边是按类型合计。多日版本的文本降级会在每条更新后注明日期。
 `generated_from.commit_count` 应等于数据里实际收录的提交数（记账提交不计入），
 「更新统计」卡片显示的就是这个数。
 

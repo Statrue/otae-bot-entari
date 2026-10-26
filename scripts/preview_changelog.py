@@ -35,10 +35,13 @@ BUILDERS = {
     "search": lambda data, args: views.search_pages(
         data.search(args.keyword), args.keyword
     ),
-    "version": lambda data, args: views.release_pages(
-        _pick(data, args.version), number=1, total=len(data.releases)
-    ),
+    "version": lambda data, args: _version_pages(data, _pick(data, args.version)),
 }
+
+
+def _version_pages(data, release) -> tuple[ChangelogPage, ...]:
+    number = data.releases.index(release) + 1
+    return views.release_pages(release, number=number, total=len(data.releases))
 
 
 def _pick(data, version: str):

@@ -336,6 +336,37 @@ class SharedFrameTests(unittest.TestCase):
             os.utime(gallery, ns=(stamp, stamp))
             self.assertEqual(set(art_frame.shared_gallery(gallery).artworks), {"a", "b"})
 
+    def test_help_runtime_and_changelog_use_the_shared_gallery(self):
+        from plugins.changelog import rendering as changelog_rendering
+
+        shared = art_frame.shared_gallery()
+        self.assertIs(help_cards.load_gallery, art_frame.load_gallery)
+        self.assertEqual(
+            {art.id for art in changelog_rendering._candidates(None)}, set(shared.artworks)
+        )
+        page = help_cards.load_pages()[0]
+        self.assertEqual(
+            {art.id for art in help_cards.ratio_candidates(page, shared)},
+            {art.id for art in art_frame.candidates(help_cards.page_height(page), shared)},
+        )
+
+    def test_help_and_changelog_render_the_same_frame(self):
+        from plugins.changelog import presentation as changelog_views
+        from plugins.changelog import rendering as changelog_rendering
+
+        theme = help_cards.HelpTheme()
+        art = art_frame.shared_gallery().artworks["cafe"]
+        help_html = help_cards.render_html(help_cards.load_pages()[0], art, theme)
+        changelog_html = changelog_rendering.page_html(changelog_views.help_pages()[0], art)
+        self.assertIn(art_frame.frame_css(theme, art), help_html)
+        self.assertIn(
+            art_frame.frame_css(theme, art, min_card_height=changelog_rendering.MIN_CARD_HEIGHT),
+            changelog_html,
+        )
+        standee = f'<div class="window"><img alt="cafe" src="{art.path.resolve().as_uri()}"></div>'
+        self.assertIn(standee, help_html)
+        self.assertIn(standee, changelog_html)
+
 
 if __name__ == "__main__":
     unittest.main()

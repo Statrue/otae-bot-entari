@@ -19,9 +19,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from otae_bot.infrastructure.rendering import art_frame
 from plugins.changelog import formatters
 from plugins.changelog import handlers as changelog_handlers
 from plugins.changelog import presentation as views
+from plugins.changelog import rendering as changelog_rendering
 from plugins.changelog.models import (
     KIND_LABELS,
     ChangelogDataError,
@@ -413,7 +415,8 @@ class PresentationTests(unittest.TestCase):
         page = views.release_pages(release, number=1, total=1)[0]
         # 标题由 rendering.page_html 输出，正文只带事实行，所以整体一起断言。
         document = page_html(page)
-        for fragment in ("<img", "<script", "<iframe"):
+        # 外框自带插画 <img>，所以只断言注入的那几段没有原样出现。
+        for fragment in ("<img src=x", "<script", "<iframe", "<b>tag"):
             self.assertNotIn(fragment, document)
         for escaped in ("&lt;img", "&lt;script", "&lt;iframe"):
             self.assertIn(escaped, document)
@@ -454,9 +457,86 @@ class PresentationTests(unittest.TestCase):
     def test_rendered_html_declares_a_restrictive_csp(self):
         html = page_html(views.latest_pages(self.changelog)[0])
         self.assertIn("default-src 'none'", html)
-        self.assertIn("font-src data:", html)
-        self.assertIn("img-src data:", html)
+        # 字体与插画走 file:// 地址，由共享浏览器从内存返回，不放行任何网络来源。
+        self.assertIn("font-src file:", html)
+        self.assertIn("img-src file:", html)
         self.assertNotIn("http://", html)
+        self.assertNotIn("https://", html)
+
+    def test_card_uses_one_artwork_for_backdrop_and_standee(self):
+        gallery = art_frame.shared_gallery()
+        art = gallery.artworks["cafe"]
+        html = page_html(views.help_pages()[0], art)
+        self.assertEqual(html.count(art.path.resolve().as_uri()), 2)
+        for other in gallery.artworks.values():
+            if other.id != art.id:
+                self.assertNotIn(other.path.resolve().as_uri(), html)
+
+
+class ArtworkChoiceTests(unittest.TestCase):
+    """插画和 help 一样随机挑；渲染出的高度让立牌露不出主体时换一张重出。"""
+
+    def setUp(self):
+        changelog_rendering._heights.clear()
+        self.gallery = art_frame.shared_gallery()
+        self.page = views.help_pages()[0]
+
+    def _png_of_height(self, height: int) -> bytes:
+        from PIL import Image
+
+        buffer = io.BytesIO()
+        Image.new("RGB", (CARD_WIDTH, height), "white").save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    def test_unknown_height_draws_from_the_whole_gallery(self):
+        self.assertEqual(
+            {art.id for art in changelog_rendering._candidates(None)},
+            set(self.gallery.artworks),
+        )
+
+    def test_tall_cards_drop_artwork_the_standee_cannot_show(self):
+        short = changelog_rendering._candidates(600)
+        tall = changelog_rendering._candidates(2000)
+        self.assertEqual(len(short), len(self.gallery.artworks))
+        self.assertLess(len(tall), len(short))
+        self.assertTrue(tall)
+
+    def test_misfit_artwork_is_redrawn_once_and_height_is_remembered(self):
+        tall = changelog_rendering._candidates(2000)
+        misfit = next(art for art in self.gallery.artworks.values() if art not in tall)
+        shots = []
+
+        async def fake_shoot(page, art):
+            shots.append(art)
+            return self._png_of_height(2000)
+
+        class Picker:
+            """候选里有那张不合适的插画就挑它，模拟运气最差的随机结果。"""
+
+            def choice(self, options):
+                return misfit if misfit in options else options[0]
+
+        with patch.object(changelog_rendering, "_shoot", fake_shoot):
+            asyncio.run(changelog_rendering.render_page(self.page, rng=Picker()))
+            self.assertEqual(shots[0], misfit)
+            self.assertEqual(len(shots), 2)
+            self.assertIn(shots[1], tall)
+
+            shots.clear()
+            asyncio.run(changelog_rendering.render_page(self.page, rng=Picker()))
+            # 第二次已知高度，首选就落在合适的插画里，不再重出。
+            self.assertEqual(len(shots), 1)
+
+    def test_fitting_artwork_renders_once(self):
+        shots = []
+
+        async def fake_shoot(page, art):
+            shots.append(art)
+            return self._png_of_height(600)
+
+        with patch.object(changelog_rendering, "_shoot", fake_shoot):
+            asyncio.run(changelog_rendering.render_page(self.page))
+        self.assertEqual(len(shots), 1)
 
 
 class DeliveryTests(unittest.TestCase):

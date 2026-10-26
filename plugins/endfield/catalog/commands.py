@@ -96,7 +96,7 @@ SUBCOMMAND_SPECS: tuple[tuple[Iterable[str], str, str, str], ...] = (
         USAGE_ALIASES,
         "影拓",
         "/ef 影拓 使用率",
-        "统计本群已绑定成员的最佳记录阵容使用率（或 /ef 回响 使用率）",
+        "统计本群已绑定成员的最佳记录阵容使用率（或 /ef 回响 使用率）；刷新用 /ef 使用率 刷新",
     ),
     (
         GACHA_SYNC_ALIASES,
@@ -414,6 +414,8 @@ def _parse_personal_command(parts: list[str]) -> ParsedEndfieldCommand | None:
     head = parts[0].lower()
     if head in OWNERSHIP_ALIASES:
         return _parse_ownership_command(parts[1:])
+    if head in USAGE_ALIASES:
+        return _parse_usage_refresh_command(parts[1:])
     if head in MONUMENT_ALIASES:
         return _parse_challenge_command("monument", parts[1:])
     if head in WAR_ECHO_ALIASES:
@@ -534,6 +536,63 @@ def _parse_ownership_command(parts: list[str]) -> ParsedEndfieldCommand:
     return ParsedEndfieldCommand("ownership_refresh" if refresh else "ownership_stats", scope=scope)
 
 
+def _parse_usage_refresh_command(parts: list[str]) -> ParsedEndfieldCommand:
+    """解析「/ef 使用率 刷新 [群内|全局]」:影拓与回响一次刷完。"""
+    scope = "auto"
+    refresh = False
+    for raw in parts:
+        token = raw.casefold()
+        if token in USAGE_REFRESH_ALIASES:
+            if refresh:
+                return ParsedEndfieldCommand(
+                    "challenge",
+                    challenge_kind="",
+                    challenge_view="usage_refresh",
+                    error="刷新选项不可重复输入。",
+                )
+            refresh = True
+            continue
+        if token in OWNERSHIP_GROUP_ALIASES:
+            if scope != "auto":
+                return ParsedEndfieldCommand(
+                    "challenge",
+                    challenge_kind="",
+                    challenge_view="usage_refresh",
+                    error="统计范围仅可指定一次。",
+                )
+            scope = "group"
+            continue
+        if token in OWNERSHIP_GLOBAL_ALIASES:
+            if scope != "auto":
+                return ParsedEndfieldCommand(
+                    "challenge",
+                    challenge_kind="",
+                    challenge_view="usage_refresh",
+                    error="统计范围仅可指定一次。",
+                )
+            scope = "global"
+            continue
+        return ParsedEndfieldCommand(
+            "challenge",
+            challenge_kind="",
+            challenge_view="usage_refresh",
+            error="指令格式：/ef 使用率 刷新 [群内|全局]。",
+        )
+    if not refresh:
+        return ParsedEndfieldCommand(
+            "challenge",
+            challenge_kind="",
+            challenge_view="usage_refresh",
+            error="指令格式：/ef 使用率 刷新 [群内|全局]。",
+        )
+    return ParsedEndfieldCommand(
+        "challenge",
+        challenge_kind="",
+        challenge_view="usage_refresh",
+        scope=scope,
+    )
+
+
 def _split_difficulty_suffix(token: str) -> tuple[str, str]:
     """Split ``野性旧事·残酷`` into its bare name and difficulty suffix."""
     match = re.match(r"^(?P<name>.+?)\s*[·・]\s*(?P<difficulty>[^·・]+)$", token)
@@ -546,7 +605,6 @@ def _parse_usage_command(kind: str, parts: list[str]) -> ParsedEndfieldCommand:
     """解析「<玩法> 使用率 ...」:范围词、难度与刷新开关各只认一次。"""
     remaining = list(parts)
     scope = "auto"
-    refresh = False
     difficulty_aliases = {
         "monument": {
             "普通": "normal", "normal": "normal", "n": "normal",
@@ -584,18 +642,13 @@ def _parse_usage_command(kind: str, parts: list[str]) -> ParsedEndfieldCommand:
                 error="使用率不需要页码，历史总使用率一次给出全部期次。",
             )
         if lowered in USAGE_REFRESH_ALIASES:
-            if refresh:
-                return ParsedEndfieldCommand(
-                    "challenge", challenge_kind=kind, challenge_view="usage_refresh",
-                    error="刷新选项不可重复输入。",
-                )
-            if history:
-                return ParsedEndfieldCommand(
-                    "challenge", challenge_kind=kind, challenge_view="usage_history",
-                    error="历史统计不支持刷新。",
-                )
-            refresh = True
-            continue
+            # 刷新已收成一个二级入口，玩法前缀不再单独承担刷新。
+            return ParsedEndfieldCommand(
+                "challenge",
+                challenge_kind=kind,
+                challenge_view="usage_history" if history else "usage",
+                error="刷新请用 /ef 使用率 刷新 [群内|全局]，一次刷完影拓与回响。",
+            )
         if lowered in OWNERSHIP_GROUP_ALIASES or lowered in OWNERSHIP_GLOBAL_ALIASES:
             resolved = "group" if lowered in OWNERSHIP_GROUP_ALIASES else "global"
             if scope != "auto" and scope != resolved:
@@ -621,7 +674,7 @@ def _parse_usage_command(kind: str, parts: list[str]) -> ParsedEndfieldCommand:
             difficulty = normalized
             continue
         terms.append(token)
-    view = "usage_refresh" if refresh else ("usage_history" if history else "usage")
+    view = "usage_history" if history else "usage"
     return ParsedEndfieldCommand(
         "challenge",
         challenge_kind=kind,
@@ -1090,7 +1143,7 @@ def format_help() -> str:
             "  /ef 回响 使用率 [赛季] [轮换] [关卡] [普通|困难|残酷] [群内|全局] —— 同上，统计战争回响",
             "  /ef 影拓 使用率 历史 [群内|全局] —— 跨全部期次的干员总使用率（回响同理）",
             "  /ef 影拓 使用率 @群友 —— 只看该成员的使用率，可与 历史 叠加",
-            "  /ef 影拓 使用率 刷新 | /ef 回响 使用率 刷新 —— 立即抓取快照（群管或机器人管理员），每 10 分钟也会自动补齐",
+            "  /ef 使用率 刷新 [群内|全局] —— 立即抓取影拓与回响快照（群管或机器人管理员），每 10 分钟也会自动补齐",
             "  群聊末尾 @群友 时查询对方绑定的主账号；未绑定时仅返回文字提示",
             "  /ef 资源流水 [账号] [日期|开始日期 结束日期|--天数 N/-d N] —— 检索源石、嵌晶玉与武库配额流水（默认最近 30 天）",
             "  /ef 资源流水 [账号] [--资源 源石|嵌晶玉|武库配额] [--类型 获取|消耗] [-a/--all] —— 按币种与变动类型筛选收支明细",

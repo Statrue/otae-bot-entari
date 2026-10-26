@@ -849,7 +849,9 @@ async def _handle_usage_stats(
         return await matcher.finish("私聊环境不支持群内统计，请使用 /ef 影拓 使用率 全局。")
 
     family = USAGE_FAMILY_WAR_ECHO if command.challenge_kind == "war_echo" else USAGE_FAMILY_MONUMENT
-    family_label = USAGE_FAMILY_LABELS[family]
+    # 统一刷新入口不带玩法前缀，两族一起刷，文案也不能只说一边。
+    refresh_all = command.challenge_view == "usage_refresh" and not command.challenge_kind
+    family_label = "影拓与回响" if refresh_all else USAGE_FAMILY_LABELS[family]
     user_id = str(event_user_id(event))
     active_bot = bot
     mentions = _challenge_mention_targets(event, bot)
@@ -956,11 +958,11 @@ async def _handle_usage_stats(
                 f"统计范围内还没有{family_label}挑战记录，已开始后台抓取"
                 f"（每批 {usage_stats_service.batch_size} 个角色，约 1 分钟）。"
                 f"稍后再发一次 /ef {family_cmd} 使用率；群管理也可以发 "
-                f"/ef {family_cmd} 使用率 刷新 立刻补一批。"
+                f"/ef 使用率 刷新 立刻补一批。"
             )
         return await matcher.finish(
             f"统计范围内还没有{family_label}挑战记录，请先让群友发一次 /ef {family_cmd}，"
-            f"或由群管理发送 /ef {family_cmd} 使用率 刷新。"
+            f"或由群管理发送 /ef 使用率 刷新。"
         )
     except Exception as exc:
         logger.exception(f"[endfield-usage] report failed: {exc}")
@@ -1232,7 +1234,7 @@ async def _handle_challenge(
     bot=None,
 ) -> None:
     """Render one personal challenge query without prompting in group chats."""
-    if command.challenge_view in {"usage", "usage_refresh"}:
+    if command.challenge_view in {"usage", "usage_history", "usage_refresh"}:
         return await _handle_usage_stats(matcher, event, command, bot=bot)
     mentioned_users = _challenge_mention_targets(event, bot)
     if mentioned_users and not is_group(event):

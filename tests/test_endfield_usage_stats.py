@@ -377,9 +377,43 @@ def test_parse_usage_history_commands():
     paged = parse_command("回响 使用率 历史 第2页")
     assert paged.error.startswith("使用率不需要页码")
     no_refresh = parse_command("回响 使用率 历史 刷新")
-    assert no_refresh.error == "历史统计不支持刷新。"
+    assert no_refresh.challenge_view == "usage_history"
+    assert no_refresh.error.startswith("刷新请用 /ef 使用率 刷新")
     duplicated = parse_command("影拓 使用率 历史 历史")
     assert duplicated.error == "历史选项不可重复输入。"
+
+
+def test_challenge_dispatch_sends_every_usage_view_to_usage_handler():
+    """使用率三态都必须进 _handle_usage_stats，别再漏掉 history。"""
+    import asyncio
+
+    import plugins.endfield.handlers as handlers
+    from plugins.endfield.catalog.commands import parse_command
+
+    routed = []
+
+    async def fake_usage_stats(matcher, event, command, *, bot=None):
+        routed.append(command.challenge_view)
+
+    original = handlers._handle_usage_stats
+    handlers._handle_usage_stats = fake_usage_stats
+    try:
+        for text in (
+            "影拓 使用率",
+            "影拓 使用率 历史",
+            "使用率 刷新",
+        ):
+            command = parse_command(text)
+            assert command.error == "", (text, command.error)
+            asyncio.run(
+                handlers._handle_challenge(
+                    object(), object(), "10001", command, object()
+                )
+            )
+    finally:
+        handlers._handle_usage_stats = original
+
+    assert routed == ["usage", "usage_history", "usage_refresh"]
 
 
 def test_legacy_challenge_schema_upgrade_keeps_records(tmp_path):
@@ -627,12 +661,21 @@ def test_parse_usage_commands():
     assert detail.challenge_difficulty == "cruel"
     assert detail.scope == "global"
 
-    refresh = parse_command("影拓 使用率 刷新 本群")
+    # 刷新已收成统一二级入口：不带玩法前缀，两族一起刷。
+    refresh = parse_command("使用率 刷新 本群")
     assert refresh.challenge_view == "usage_refresh"
+    assert refresh.challenge_kind == ""
     assert refresh.scope == "group"
 
-    duplicate = parse_command("影拓 使用率 刷新 刷新")
-    assert duplicate.error
+    duplicate = parse_command("使用率 刷新 刷新")
+    assert duplicate.error == "刷新选项不可重复输入。"
+
+    # 旧写法不再承担刷新，改成指路文案。
+    legacy = parse_command("影拓 使用率 刷新")
+    assert legacy.challenge_view == "usage"
+    assert legacy.error.startswith("刷新请用 /ef 使用率 刷新")
+    legacy_echo = parse_command("回响 使用率 刷新 群内")
+    assert legacy_echo.error.startswith("刷新请用 /ef 使用率 刷新")
 
     scoped = parse_command("影拓 使用率 群内 全局")
     assert scoped.error == "统计范围仅可指定一次。"

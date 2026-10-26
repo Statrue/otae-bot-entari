@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from otae_bot.help_images import cover_visibility, image_ratio  # noqa: E402
-from otae_bot.infrastructure.rendering import help_cards, help_runtime  # noqa: E402
+from otae_bot.infrastructure.rendering import art_frame, help_cards, help_runtime  # noqa: E402
 
 RERENDER = "run: python scripts/render_help_cards.py --write"
 
@@ -315,6 +315,26 @@ class HelpRuntimeCacheTests(unittest.IsolatedAsyncioTestCase):
             os.environ.pop(help_runtime.CACHE_PATH_ENV, None)
             self.assertEqual(help_runtime.cache_dir(),
                              help_runtime.PROJECT_ROOT / help_runtime.DEFAULT_CACHE_PATH)
+
+
+class SharedFrameTests(unittest.TestCase):
+    """Help and every card on the same template draw from one gallery through one frame."""
+
+    def test_shared_gallery_reloads_when_the_file_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            Image.new("RGB", (30, 40), "white").save(root / "a.png")
+            Image.new("RGB", (40, 30), "white").save(root / "b.png")
+            gallery = root / "gallery.json"
+            gallery.write_text(json.dumps({"art": [{"id": "a", "file": "a.png"}]}), encoding="utf-8")
+            self.assertEqual(set(art_frame.shared_gallery(gallery).artworks), {"a"})
+            gallery.write_text(
+                json.dumps({"art": [{"id": "a", "file": "a.png"}, {"id": "b", "file": "b.png"}]}),
+                encoding="utf-8",
+            )
+            stamp = gallery.stat().st_mtime_ns + 1_000_000
+            os.utime(gallery, ns=(stamp, stamp))
+            self.assertEqual(set(art_frame.shared_gallery(gallery).artworks), {"a", "b"})
 
 
 if __name__ == "__main__":

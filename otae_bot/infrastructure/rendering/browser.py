@@ -24,6 +24,7 @@ from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import IntEnum
+from collections import deque
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 
 from loguru import logger
@@ -392,9 +393,13 @@ async def _run_on_browser(
         host.run(job, float(device_scale_factor), RenderPriority(priority), marks),
         host.loop,
     )
+    ok = False
     try:
-        return await asyncio.wrap_future(future)
+        result = await asyncio.wrap_future(future)
+        ok = True
+        return result
     finally:
+        _render_log.append((time.time(), time.perf_counter() - queued, ok))
         if marks:
             waited = marks[0] - queued
             timing = _timing.get()
@@ -404,6 +409,20 @@ async def _run_on_browser(
                 timing.calls += 1
             if waited > QUEUE_WAIT_WARNING_SECONDS:
                 logger.warning(f"[browser] queue_wait={waited:.3f}s before {name}")
+
+
+#: (wall time, seconds including queue wait, succeeded) of recent browser renders.
+_render_log: deque[tuple[float, float, bool]] = deque(maxlen=4000)
+
+
+def render_timing_snapshot(since: float = 0.0) -> dict:
+    """Count, mean and p95 seconds of browser renders finished after ``since`` (wall time)."""
+    durations = sorted(seconds for at, seconds, ok in _render_log if at >= since and ok)
+    failures = sum(1 for at, _, ok in _render_log if at >= since and not ok)
+    if not durations:
+        return {"count": 0, "failures": failures, "mean": None, "p95": None}
+    p95 = durations[min(len(durations) - 1, int(len(durations) * 0.95))]
+    return {"count": len(durations), "failures": failures, "mean": sum(durations) / len(durations), "p95": p95}
 
 
 def browser_queue_snapshot() -> dict:

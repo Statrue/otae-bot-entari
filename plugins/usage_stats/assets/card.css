@@ -1,0 +1,67 @@
+/* 指令统计卡片的面板内容。外框由 art_frame 提供，与 help 共用；主色变量由 art_card 写进 :root。类名统一加 us- 前缀。 */
+
+:root { --muted: #8a8a8a; --tint: #e3ecf8; --ok: #4f9a6a; --bad: #d0505f; --rule: rgba(82, 127, 190, .14); }
+body { color: var(--body); font-variant-numeric: tabular-nums; }
+
+.us-strip { display: flex; margin-bottom: 22px; padding: 14px 0 12px; border-radius: 16px; background: rgba(255, 255, 255, .62); }
+.us-strip > div { flex: 1; min-width: 0; padding: 0 22px; }
+.us-strip > div + div { border-left: 2px solid var(--tint); }
+.us-strip small { display: block; font-size: 15px; line-height: 20px; font-weight: 500; }
+.us-strip b { display: block; font-size: 32px; line-height: 40px; font-weight: 700; color: var(--accent); white-space: nowrap; }
+.us-strip b i { margin-left: 4px; font-size: 16px; font-style: normal; font-weight: 500; color: var(--body); }
+.us-strip em { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: 18px; font-style: normal; font-weight: 500; color: var(--muted); }
+
+.us-cols { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr); column-gap: 28px; }
+.us-heading { margin: 0 0 6px; font-size: 22px; line-height: 30px; font-weight: 700; color: var(--heading); }
+.us-cols section > .us-heading ~ .us-heading { margin-top: 18px; }
+.us-heading em { margin-left: 8px; font-size: 14px; font-style: normal; font-weight: 500; color: var(--accent); vertical-align: 2px; }
+.us-empty { font-size: 17px; line-height: 26px; color: var(--muted); }
+
+.us-rank { display: grid; grid-template-columns: 28px minmax(0, 1fr) 64px 64px; column-gap: 10px; align-items: center; padding: 5px 0; }
+.us-rank + .us-rank { border-top: 1px solid var(--rule); }
+.us-no { font-size: 16px; font-weight: 700; color: var(--muted); }
+.us-top .us-no { color: var(--accent); }
+.us-name { min-width: 0; }
+.us-name b { font-size: 17px; line-height: 22px; font-weight: 700; color: var(--heading); overflow-wrap: anywhere; }
+.us-name small { margin-left: 6px; font-size: 12px; color: var(--muted); }
+.us-track { display: block; height: 6px; margin-top: 4px; border-radius: 3px; background: var(--tint); overflow: hidden; }
+.us-track i { display: block; height: 100%; border-radius: 3px; background: var(--accent-soft); }
+.us-top .us-track i { background: var(--accent); }
+.us-num { text-align: right; font-size: 17px; font-weight: 700; color: var(--heading); }
+.us-num small { display: block; font-size: 12px; font-weight: 500; color: var(--muted); }
+.us-delta { text-align: right; font-size: 14px; font-weight: 700; }
+.us-up { color: var(--ok); } .us-down { color: var(--bad); } .us-flat { color: var(--muted); }
+
+.us-stack { display: flex; height: 16px; margin: 4px 0 10px; border-radius: 8px; overflow: hidden; }
+.us-stack i { display: block; height: 100%; }
+.us-legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 18px; font-size: 15px; line-height: 24px; font-weight: 500; }
+.us-legend span { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.us-legend span i { flex: none; width: 10px; height: 10px; border-radius: 3px; }
+.us-legend span b { margin-left: auto; font-weight: 700; color: var(--heading); }
+
+.us-days { display: flex; align-items: flex-end; gap: 10px; height: 96px; padding: 0 4px; border-bottom: 2px solid var(--accent-soft); }
+.us-days.us-many { gap: 3px; }
+.us-days div { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+.us-days div b { font-size: 12px; font-weight: 700; color: var(--muted); }
+.us-days div i { width: 100%; min-height: 2px; border-radius: 4px 4px 0 0; background: var(--accent-soft); }
+.us-days div.us-today i { background: var(--accent); }
+.us-days div.us-today b { color: var(--accent); }
+.us-dayaxis { display: flex; gap: 10px; padding: 4px 4px 0; font-size: 13px; color: var(--muted); font-weight: 500; }
+.us-days.us-many + .us-dayaxis { gap: 3px; }
+.us-dayaxis span { flex: 1; text-align: center; white-space: nowrap; }
+
+.us-heat { display: grid; grid-template-columns: 30px repeat(24, 1fr); gap: 2px; font-size: 11px; color: var(--muted); font-weight: 500; }
+.us-heat i { height: 13px; border-radius: 2px; }
+.us-heat span { line-height: 13px; }
+.us-heatx { display: grid; grid-template-columns: 30px repeat(4, 1fr); margin-top: 3px; font-size: 11px; color: var(--muted); }
+
+.us-wide { margin-top: 16px; }
+.us-users { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 18px; }
+.us-users div { display: flex; align-items: baseline; gap: 8px; font-size: 16px; line-height: 26px; font-weight: 500; }
+.us-users em { width: 18px; font-style: normal; font-weight: 700; color: var(--accent); }
+.us-users b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: var(--heading); }
+.us-users small { color: var(--muted); }
+
+.us-note { margin-top: 12px; padding-left: 10px; border-left: 3px solid var(--accent-soft); font-size: 15px; line-height: 23px; font-weight: 500; color: #6b6b6b; }
+.us-note b { margin-right: 6px; font-weight: 700; color: var(--accent); }
+.us-foot { margin-top: auto; padding-top: 14px; text-align: right; font-size: 15px; line-height: 22px; font-weight: 500; color: var(--muted); }

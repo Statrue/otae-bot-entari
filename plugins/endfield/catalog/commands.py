@@ -1741,3 +1741,28 @@ def _score_normalized_pair(query: str, value: str) -> int:
     elif ratio >= 0.66:
         best = max(best, 65)
     return best
+
+
+def usage_subcommand_labels() -> dict[str, str]:
+    """一级子命令（含别名）→ 指令统计里显示的名字。只收这些词，用户的其他参数不进统计。"""
+    groups = (
+        ("持有率", OWNERSHIP_ALIASES), ("使用率", USAGE_ALIASES), ("影拓", MONUMENT_ALIASES),
+        ("回响", WAR_ECHO_ALIASES), ("抽卡", GACHA_ALIASES), ("抽卡记录", GACHA_HISTORY_ALIASES - {"history"}),
+        ("抽卡同步", GACHA_SYNC_ALIASES), ("抽卡导入", GACHA_IMPORT_ALIASES), ("签到", ATTENDANCE_ALIASES),
+        ("日常", DASHBOARD_ALIASES), ("探索", EXPLORATION_ALIASES), ("奖章", MEDAL_ALIASES),
+        ("档案", ARCHIVE_ALIASES), ("养成统计", INVESTMENT_ALIASES), ("资源流水", CURRENCY_LOG_ALIASES),
+        ("基建", ACCOUNT_BASE_ALIASES), ("绑定", BIND_ALIASES), ("账号", ACCOUNT_ALIASES),
+        ("主账号", PRIMARY_ALIASES), ("解绑", UNBIND_ALIASES), ("干员", OPERATOR_ALIASES),
+        ("武器", WEAPON_ALIASES), ("装备", EQUIPMENT_ALIASES), ("关卡", STAGE_ALIASES),
+        ("物品", ENCYCLOPEDIA_SCOPE_ALIASES["item"]), ("道具", ENCYCLOPEDIA_SCOPE_ALIASES["prop"]),
+        ("敌人", ENCYCLOPEDIA_SCOPE_ALIASES["enemy"]), ("词条", ENCYCLOPEDIA_SCOPE_ALIASES["term"]),
+        ("配装", LOADOUT_ALIASES), ("速算", QUICK_CALC_ALIASES), ("搜索", SEARCH_ALIASES),
+        ("随机", RANDOM_WIKI_ALIASES), ("版本日历", CALENDAR_ALIASES), ("公告", {"公告", "活动提醒", "announcements"}),
+        ("数据源", SOURCE_ALIASES), ("别名", ALIAS_COMMAND_ALIASES), ("帮助", HELP_ALIASES), ("dev", DEV_ALIASES),
+    )
+    labels: dict[str, str] = {}
+    for label, aliases in groups:
+        for alias in aliases:
+            labels.setdefault(alias, label)
+    return labels
+

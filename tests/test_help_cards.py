@@ -20,7 +20,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from otae_bot.help_images import cover_visibility, image_ratio  # noqa: E402
-from otae_bot.infrastructure.rendering import art_frame, help_cards, help_runtime  # noqa: E402
+from otae_bot.infrastructure.rendering import (  # noqa: E402
+    art_card,
+    art_frame,
+    help_cards,
+    help_runtime,
+)
 
 RERENDER = "run: python scripts/render_help_cards.py --write"
 
@@ -337,12 +342,10 @@ class SharedFrameTests(unittest.TestCase):
             self.assertEqual(set(art_frame.shared_gallery(gallery).artworks), {"a", "b"})
 
     def test_help_runtime_and_changelog_use_the_shared_gallery(self):
-        from plugins.changelog import rendering as changelog_rendering
-
         shared = art_frame.shared_gallery()
         self.assertIs(help_cards.load_gallery, art_frame.load_gallery)
         self.assertEqual(
-            {art.id for art in changelog_rendering._candidates(None)}, set(shared.artworks)
+            {art.id for art in art_card.candidates(None)}, set(shared.artworks)
         )
         page = help_cards.load_pages()[0]
         self.assertEqual(

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from collections import deque
 from datetime import datetime
 from time import perf_counter
 
@@ -14,6 +16,17 @@ DEFAULT_WARN_SECONDS = 0.2
 DEFAULT_ERROR_SECONDS = 1.0
 
 _task: asyncio.Task[None] | None = None
+#: (wall time, lag seconds) of recent samples, about two minutes at the default interval.
+_samples: deque[tuple[float, float]] = deque(maxlen=240)
+
+
+def loop_lag_snapshot(window_seconds: float = 60.0) -> dict[str, float | None]:
+    """Latest and worst event-loop lag in the window, in seconds; ``None`` before the first sample."""
+    if not _samples:
+        return {"last": None, "max": None}
+    cutoff = time.time() - window_seconds
+    recent = [lag for at, lag in _samples if at >= cutoff] or [_samples[-1][1]]
+    return {"last": _samples[-1][1], "max": max(recent)}
 
 
 def _timestamp() -> str:
@@ -49,6 +62,7 @@ async def watch_loop(
         started = perf_counter()
         await asyncio.sleep(interval_seconds)
         lag = perf_counter() - started - interval_seconds
+        _samples.append((time.time(), max(0.0, lag)))
         level = _lag_level(lag, warn_seconds, error_seconds)
         if level == "ERROR":
             logger.error(f"[watchdog] event loop blocked {lag:.3f}s at {_timestamp()}")

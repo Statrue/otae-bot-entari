@@ -23,6 +23,7 @@ PLUGIN_NAMES = {
     "changelog": ("更新日志", "changelog", "版本"),
     "endfield": ("终末地", "ef", "zmd"),
     "forkout": ("叉出去", "fork"),
+    "group_manager": ("群管理",),
     "grok_bot": ("Grok Bot", "grok", "grokbot"),
     "help_plugin": ("帮助", "help"),
     "hyw": ("HYW 问答", "q", "何意味"),
@@ -30,8 +31,11 @@ PLUGIN_NAMES = {
     "minecraft_plugin": ("Minecraft", "mc", "我的世界"),
     "peek": ("窥视",),
     "radar": ("AI 智商雷达", "radar", "智商雷达"),
+    "request_handler": ("请求审批",),
+    "status": ("运行状态", "status", "状态"),
     "steamInfo": ("Steam", "steam"),
     "tibo_radar": ("Tibo 雷达", "tibo", "雷达"),
+    "usage_stats": ("指令统计", "统计", "usage"),
 }
 
 

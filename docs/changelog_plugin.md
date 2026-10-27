@@ -192,7 +192,7 @@ help 改配色时更新日志跟着变；只有最小卡片高度单独定为 46
 按 1x 渲染，与 help 一致。面板内容的类名统一加 `cl-` 前缀，避免与外框的 `.page`、`.card`、`.panel` 等冲突。
 
 插画和 help 一样从 `art_frame.shared_gallery()`（即 `assets/image/help/art/gallery.json`）**每次随机挑**。立牌能露出
-多少主体取决于卡片高度，而高度要渲染完才知道，所以 `rendering.render_page` 先随机挑一张出图，
+多少主体取决于卡片高度，而高度要渲染完才知道，所以 `art_card.render_card`（更新日志的 `rendering.render_page` 直接调用它）先随机挑一张出图，
 量出高度后，若这张在立牌里露出的比例低于 `art_frame.WINDOW_VISIBILITY_FLOOR`，就从合适的
 插画里重挑一张再出一次；量到的高度按页面内容记在内存里，同一张卡片下次直接按它挑，不再重出。
 

@@ -131,16 +131,10 @@ def _users(report: UsageReport) -> str:
     return f'<section class="us-wide"><h2 class="us-heading">{title}<em>{note}</em></h2><div class="us-users">{rows}</div></section>'
 
 
-NOTE = (
-    '<p class="us-note"><b>口径</b>一条消息命中一个指令算一次，只记指令和子命令，不记参数内容。'
-    "换范围：/统计 全局 · /统计 30天 · /统计 &lt;插件名&gt;</p>"
-)
-
-
 def panel_html(report: UsageReport, days: int, now: datetime) -> str:
     foot = f'<p class="us-foot">生成于 {now:%m-%d %H:%M}</p>'
     if not report.total:
-        return _strip(report, days) + '<p class="us-empty">这段时间还没有人用过指令。</p>' + NOTE + foot
+        return _strip(report, days) + '<p class="us-empty">这段时间还没有人用过指令。</p>' + foot
     plugin_section = (
         ""
         if report.scope.plugin
@@ -156,7 +150,6 @@ def panel_html(report: UsageReport, days: int, now: datetime) -> str:
         + f'<h2 class="us-heading">活跃时段<em>星期 × 小时，颜色越深越忙</em></h2>{_heat(report)}'
         + "</section></div>"
         + _users(report)
-        + NOTE
         + foot
     )
 

@@ -1,0 +1,52 @@
+/* 运行状态卡的面板内容。外框由 art_frame 提供，与 help 共用；主色变量由 art_card 写进 :root。类名统一加 st- 前缀。 */
+
+:root { --muted: #8a8a8a; --tint: #e3ecf8; --ok: #4f9a6a; --ok-tint: #e1f1e6; --warn: #c58a2c; --warn-tint: #f8ecd6; --bad: #d0505f; --bad-tint: #f9e0e3; }
+body { color: var(--body); font-variant-numeric: tabular-nums; }
+
+.st-strip { display: flex; margin-bottom: 22px; padding: 14px 0 12px; border-radius: 16px; background: rgba(255, 255, 255, .62); }
+.st-strip > div { flex: 1; min-width: 0; padding: 0 22px; }
+.st-strip > div + div { border-left: 2px solid var(--tint); }
+.st-strip small { display: block; font-size: 15px; line-height: 20px; font-weight: 500; }
+.st-strip b { display: block; font-size: 32px; line-height: 40px; font-weight: 700; color: var(--accent); white-space: nowrap; }
+.st-strip b i { margin-left: 4px; font-size: 16px; font-style: normal; font-weight: 500; color: var(--body); }
+.st-strip em { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: 18px; font-style: normal; font-weight: 500; color: var(--muted); }
+
+.st-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; }
+.st-cols section + section { margin-top: 20px; }
+.st-heading { margin: 0 0 4px; font-size: 22px; line-height: 30px; font-weight: 700; color: var(--heading); }
+.st-heading em { margin-left: 8px; font-size: 14px; font-style: normal; font-weight: 500; color: var(--accent); vertical-align: 2px; }
+.st-empty { font-size: 16px; line-height: 26px; color: var(--muted); }
+
+.st-row { display: flex; align-items: baseline; gap: .45em; font-size: 18px; line-height: 28px; font-weight: 500; }
+.st-cmd { flex: none; color: var(--heading); white-space: nowrap; }
+.st-desc { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-badge { flex: none; padding: 0 7px; border-radius: 8px; font-size: 13px; line-height: 19px; }
+.st-ok { color: var(--ok); background: var(--ok-tint); }
+.st-warn { color: var(--warn); background: var(--warn-tint); }
+.st-bad { color: var(--bad); background: var(--bad-tint); }
+.st-idle { color: var(--muted); background: rgba(0, 0, 0, .05); }
+
+.st-meter { display: grid; grid-template-columns: 80px minmax(0, 1fr) 170px; gap: 10px; align-items: center; font-size: 18px; line-height: 28px; font-weight: 500; }
+.st-meter b { font-weight: 500; color: var(--heading); }
+.st-meter > span:last-child { text-align: right; white-space: nowrap; }
+.st-track { display: block; height: 8px; border-radius: 4px; background: var(--tint); overflow: hidden; }
+.st-track.st-none { background: transparent; }
+.st-track i { display: block; height: 100%; border-radius: 4px; background: var(--accent); }
+.st-track i.st-warnbar { background: var(--warn); }
+
+.st-hours { display: flex; align-items: flex-end; gap: 3px; height: 74px; margin-top: 4px; padding: 0 2px; border-bottom: 2px solid var(--accent-soft); }
+.st-hours i { flex: 1; min-height: 2px; border-radius: 3px 3px 0 0; background: var(--accent-soft); }
+.st-hours i.st-now { background: var(--accent); }
+.st-axis { display: flex; justify-content: space-between; font-size: 13px; line-height: 18px; color: var(--muted); font-weight: 500; }
+.st-top { margin-top: 6px; font-size: 17px; line-height: 25px; font-weight: 500; }
+.st-top em { margin: 0 14px 0 4px; font-style: normal; color: var(--accent); }
+
+.st-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.st-chips span { padding: 0 8px; border-radius: 8px; font-size: 14px; line-height: 22px; font-weight: 500; color: var(--heading); background: rgba(255, 255, 255, .7); }
+.st-chips span.st-admin { color: #8a5a00; background: var(--warn-tint); }
+.st-chips span.st-off { color: #9a9a9a; background: rgba(0, 0, 0, .04); text-decoration: line-through; }
+
+.st-note { margin-top: 6px; padding-left: 10px; border-left: 3px solid var(--accent-soft); font-size: 16px; line-height: 23px; font-weight: 500; color: #6b6b6b; overflow-wrap: anywhere; }
+.st-note.st-error { border-left-color: var(--bad); }
+.st-note time { margin-right: 8px; color: var(--heading); }
+.st-foot { margin-top: auto; padding-top: 14px; text-align: right; font-size: 15px; line-height: 22px; font-weight: 500; color: var(--muted); }

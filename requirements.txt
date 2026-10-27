@@ -15,6 +15,7 @@ pypinyin
 apscheduler>=3.10.0
 PyYAML>=6.0
 pycryptodome>=3.20.0
+psutil>=5.9
 
 # ── HYW 搜索问答的核心库 ──
 # 这两个包不发布到 PyPI，源码收在 vendor/hyw-frontier/ 里，以可编辑方式装。

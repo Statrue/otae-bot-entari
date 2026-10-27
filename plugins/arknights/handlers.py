@@ -28,6 +28,7 @@ from otae_bot.adapters.entari import (
     prompt,
 )
 from otae_bot.adapters.message_log import sensitive_input
+from otae_bot.command_usage import describe_command
 from otae_bot.attendance_delivery import build_delivery, deliver
 from otae_bot.attendance_registry import (
     AttendanceCapability,
@@ -55,13 +56,19 @@ from otae_bot.infrastructure.rendering.help_runtime import cached_help_image
 from .attendance import sign_roles
 from .client import ArknightsAPIError, ArknightsClient, HypergryphCaptchaRequired, extract_account_token
 from .commands import (
+    ACCOUNT_ALIASES,
     ACTION_ACCOUNTS,
     ACTION_ATTENDANCE,
     ACTION_BIND,
     ACTION_PRIMARY,
     ACTION_UNBIND,
+    ATTENDANCE_ALIASES,
+    BIND_ALIASES,
+    HELP_ALIASES,
+    PRIMARY_ALIASES,
     PRIVATE_ONLY_NOTICE,
     ROOT_ALIASES,
+    UNBIND_ALIASES,
     UNBIND_NEEDS_SELECTOR,
     format_accounts,
     format_help,
@@ -95,6 +102,16 @@ CODE_PROMPT = "验证码已发送，请输入短信验证码；回复“取消�
 CAPTCHA_PROMPT = "请发送验证页面显示的一整行结果；回复“取消”退出。"
 CANCELLED_TEXT = "绑定已取消或等待超时。"
 PRIMARY_NEEDS_SELECTOR = "请指定要设为主账号的角色：/ak 主账号 <编号|昵称|UID后四位>。"
+
+describe_command(
+    ROOT_ALIASES,
+    display="/ak",
+    subcommands={
+        **dict.fromkeys(ATTENDANCE_ALIASES, "签到"), **dict.fromkeys(BIND_ALIASES, "绑定"),
+        **dict.fromkeys(ACCOUNT_ALIASES, "账号"), **dict.fromkeys(PRIMARY_ALIASES, "主账号"),
+        **dict.fromkeys(UNBIND_ALIASES, "解绑"), **dict.fromkeys(HELP_ALIASES, "帮助"),
+    },
+)
 
 _arknights_alconna = on_alconna(
     Alconna(list(ROOT_ALIASES), Args["rest;?", MultiVar(AnyString)]),

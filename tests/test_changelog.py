@@ -19,7 +19,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from otae_bot.infrastructure.rendering import art_frame
+from otae_bot.infrastructure.rendering import art_card, art_frame
 from plugins.changelog import formatters
 from plugins.changelog import handlers as changelog_handlers
 from plugins.changelog import presentation as views
@@ -474,10 +474,10 @@ class PresentationTests(unittest.TestCase):
 
 
 class ArtworkChoiceTests(unittest.TestCase):
-    """插画和 help 一样随机挑；渲染出的高度让立牌露不出主体时换一张重出。"""
+    """插画和 help 一样随机挑；渲染出的高度让立牌露不出主体时换一张重出（逻辑在 art_card，经更新日志验证）。"""
 
     def setUp(self):
-        changelog_rendering._heights.clear()
+        art_card._heights.clear()
         self.gallery = art_frame.shared_gallery()
         self.page = views.help_pages()[0]
 
@@ -490,19 +490,19 @@ class ArtworkChoiceTests(unittest.TestCase):
 
     def test_unknown_height_draws_from_the_whole_gallery(self):
         self.assertEqual(
-            {art.id for art in changelog_rendering._candidates(None)},
+            {art.id for art in art_card.candidates(None)},
             set(self.gallery.artworks),
         )
 
     def test_tall_cards_drop_artwork_the_standee_cannot_show(self):
-        short = changelog_rendering._candidates(600)
-        tall = changelog_rendering._candidates(2000)
+        short = art_card.candidates(600)
+        tall = art_card.candidates(2000)
         self.assertEqual(len(short), len(self.gallery.artworks))
         self.assertLess(len(tall), len(short))
         self.assertTrue(tall)
 
     def test_misfit_artwork_is_redrawn_once_and_height_is_remembered(self):
-        tall = changelog_rendering._candidates(2000)
+        tall = art_card.candidates(2000)
         misfit = next(art for art in self.gallery.artworks.values() if art not in tall)
         shots = []
 
@@ -516,7 +516,7 @@ class ArtworkChoiceTests(unittest.TestCase):
             def choice(self, options):
                 return misfit if misfit in options else options[0]
 
-        with patch.object(changelog_rendering, "_shoot", fake_shoot):
+        with patch.object(art_card, "_shoot", fake_shoot):
             asyncio.run(changelog_rendering.render_page(self.page, rng=Picker()))
             self.assertEqual(shots[0], misfit)
             self.assertEqual(len(shots), 2)
@@ -534,7 +534,7 @@ class ArtworkChoiceTests(unittest.TestCase):
             shots.append(art)
             return self._png_of_height(600)
 
-        with patch.object(changelog_rendering, "_shoot", fake_shoot):
+        with patch.object(art_card, "_shoot", fake_shoot):
             asyncio.run(changelog_rendering.render_page(self.page))
         self.assertEqual(len(shots), 1)
 

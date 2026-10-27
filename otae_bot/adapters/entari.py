@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import inspect
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import timedelta
@@ -263,6 +264,12 @@ class _ManagedJob:
     subscriber: Any
     active_tasks: set[asyncio.Task[Any]]
     max_instances: int
+    interval_seconds: float = 0.0
+    runs: int = 0
+    failures: int = 0
+    last_finished: float | None = None
+    last_ok: bool | None = None
+    last_error: str = ""
 
 
 class _Scheduler:
@@ -309,13 +316,13 @@ class _Scheduler:
                 raise ValueError(f"scheduled job already exists: {job_id}")
             self._dispose_job(existing)
 
-        managed = _ManagedJob(job_id, None, set(), max_instances)
+        managed = _ManagedJob(job_id, None, set(), max_instances, interval_seconds=seconds)
 
         async def _job():
             if len(managed.active_tasks) >= managed.max_instances:
                 logger.debug(f"[scheduler] skipped overlapping job id={job_id}")
                 return None
-            task = asyncio.create_task(self._run_job(job_id, func))
+            task = asyncio.create_task(self._run_job(job_id, func, managed))
             managed.active_tasks.add(task)
             task.add_done_callback(managed.active_tasks.discard)
             return None
@@ -327,7 +334,7 @@ class _Scheduler:
         self._jobs[job_id] = managed
         return _job
 
-    async def _run_job(self, job_id: str, func: Callable[..., Any]) -> None:
+    async def _run_job(self, job_id: str, func: Callable[..., Any], managed: _ManagedJob | None = None) -> None:
         started = perf_counter()
         try:
             if inspect.iscoroutinefunction(func):
@@ -336,11 +343,19 @@ class _Scheduler:
                 result = await asyncio.to_thread(func)
             if inspect.isawaitable(result):
                 await result
+            if managed is not None:
+                managed.last_ok, managed.last_error = True, ""
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             logger.exception(f"[scheduler] job failed id={job_id}")
+            if managed is not None:
+                managed.failures += 1
+                managed.last_ok, managed.last_error = False, f"{type(exc).__name__}: {exc}"[:200]
         finally:
+            if managed is not None:
+                managed.runs += 1
+                managed.last_finished = time.time()
             logger.debug(
                 f"[scheduler] job completed id={job_id} elapsed={perf_counter() - started:.3f}s"
             )
@@ -353,6 +368,22 @@ class _Scheduler:
             self._retired_tasks.add(task)
             task.add_done_callback(self._retired_tasks.discard)
         job.active_tasks.clear()
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        """Interval, run count and last outcome of every registered job (for /status)."""
+        return [
+            {
+                "id": job.job_id,
+                "interval_seconds": job.interval_seconds,
+                "runs": job.runs,
+                "failures": job.failures,
+                "last_finished": job.last_finished,
+                "last_ok": job.last_ok,
+                "last_error": job.last_error,
+                "running": bool(job.active_tasks),
+            }
+            for job in self._jobs.values()
+        ]
 
     async def close(self) -> None:
         jobs = list(self._jobs.values())

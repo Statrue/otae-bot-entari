@@ -61,6 +61,7 @@ from otae_bot.adapters.entari import (
     timer,
 )
 from otae_bot.adapters.message_log import sensitive_input
+from otae_bot.command_usage import describe_command
 from otae_bot.adapters.onebot import send_forward_images
 from otae_bot.infrastructure.rendering.help_runtime import cached_help_image
 from otae_bot.infrastructure.http.asset_policy import asset_render_budget
@@ -118,6 +119,7 @@ from .catalog.commands import (
     ParsedEndfieldCommand,
     ParsedLoadoutSpec,
     ROOT_ALIASES,
+    usage_subcommand_labels,
     choose_candidate,
     candidate_options,
     dev_visible_for_user,
@@ -468,6 +470,9 @@ endfield_cmd = on_alconna(
     priority=5,
     block=True,
 )
+
+# 指令统计：/终末地 /ef /zmd 合并显示为 /ef；不是登记子命令的第一个词按资料查询计。
+describe_command(ROOT_ALIASES, display="/ef", subcommands=usage_subcommand_labels(), default_sub="资料查询")
 
 endfield_operator_shortcut = on_alconna(
     Alconna(["efop", "efoperator", "终末地干员"], Args["rest;?", MultiVar(AnyString)]),

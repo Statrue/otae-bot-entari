@@ -196,7 +196,7 @@ class HelpArtworkRatioTests(unittest.TestCase):
     def test_the_whole_gallery_is_usable_on_every_page(self):
         """The blurred backdrop never filters: every shipped artwork stays available."""
         everything = set(self.gallery.artworks)
-        self.assertEqual(len(everything), 10)
+        self.assertEqual(len(everything), 19)
         for page in self.pages.values():
             with self.subTest(page=page.id):
                 chosen = {art.id for art in help_cards.ratio_candidates(page, self.gallery)}

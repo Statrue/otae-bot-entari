@@ -90,6 +90,87 @@
         0.25
       ],
       "credit": "pixiv 131041362_p36"
+    },
+    {
+      "id": "plushhead",
+      "file": "plushhead.jpg",
+      "focus": [
+        0.5,
+        0.5
+      ],
+      "credit": "用户提供 2026-10-28：头顶玩偶"
+    },
+    {
+      "id": "bar",
+      "file": "bar.jpg",
+      "focus": [
+        0.57,
+        0.19
+      ],
+      "credit": "用户提供 2026-10-28：酒吧兔女郎"
+    },
+    {
+      "id": "rabbit",
+      "file": "rabbit.jpg",
+      "focus": [
+        0.6,
+        0.3
+      ],
+      "credit": "用户提供 2026-10-28：抱兔子"
+    },
+    {
+      "id": "moonnight",
+      "file": "moonnight.jpg",
+      "focus": [
+        0.57,
+        0.25
+      ],
+      "credit": "用户提供 2026-10-28：月夜浴衣"
+    },
+    {
+      "id": "beret",
+      "file": "beret.jpg",
+      "focus": [
+        0.5,
+        0.23
+      ],
+      "credit": "用户提供 2026-10-28：红色贝雷帽"
+    },
+    {
+      "id": "christmas",
+      "file": "christmas.jpg",
+      "focus": [
+        0.42,
+        0.27
+      ],
+      "credit": "用户提供 2026-10-28：圣诞蛋糕"
+    },
+    {
+      "id": "pointing",
+      "file": "pointing.jpg",
+      "focus": [
+        0.5,
+        0.27
+      ],
+      "credit": "用户提供 2026-10-28：制服指向"
+    },
+    {
+      "id": "devil",
+      "file": "devil.jpg",
+      "focus": [
+        0.59,
+        0.34
+      ],
+      "credit": "用户提供 2026-10-28：小恶魔"
+    },
+    {
+      "id": "qipao",
+      "file": "qipao.jpg",
+      "focus": [
+        0.44,
+        0.27
+      ],
+      "credit": "用户提供 2026-10-28：旗袍与扇子"
     }
   ]
 }

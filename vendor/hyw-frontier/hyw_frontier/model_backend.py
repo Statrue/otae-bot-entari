@@ -17,7 +17,10 @@ from datetime import datetime, timezone
 from queue import Empty, SimpleQueue
 from threading import Event
 import time
+from urllib.parse import urlsplit
+import uuid
 
+from . import __version__
 from .credentials import ModelConnection
 from .errors import FrontierError
 from .model_limits import resolve_output_limit
@@ -26,6 +29,10 @@ from .tools import SEARCH_PROVIDERS, tool_definitions
 
 RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 _RETRY_LOG = logging.getLogger("hyw")
+OPENCODE_SESSION_HEADER = "x-opencode-session"
+USER_AGENT = f"hyw-frontier/{__version__}"
+# One id per process, never per request: OpenCode routes and caches by it.
+_OPENCODE_SESSION = str(uuid.uuid4())
 
 
 def _env_number(name: str, default, cast):
@@ -36,6 +43,27 @@ def _env_number(name: str, default, cast):
         return cast(str(raw).strip())
     except (TypeError, ValueError):
         return default
+
+
+def is_opencode(base_url: str | None) -> bool:
+    try:
+        parts = urlsplit(base_url or "")
+    except ValueError:
+        return False
+    host = (parts.hostname or "").lower()
+    return host == "opencode.ai" or host.endswith(".opencode.ai") or "/inference/go" in parts.path
+
+
+def opencode_session_id() -> str:
+    return os.environ.get("HYW_OPENCODE_SESSION", "").strip() or _OPENCODE_SESSION
+
+
+def opencode_headers(base_url: str | None) -> dict[str, str]:
+    """OpenCode rejects requests without a session id (400 MissingSessionID) and asks for a
+    non-generic User-Agent; other endpoints get no extra headers."""
+    if not is_opencode(base_url):
+        return {}
+    return {OPENCODE_SESSION_HEADER: opencode_session_id(), "User-Agent": USER_AGENT}
 
 
 def http_status(error: BaseException) -> int | None:
@@ -317,8 +345,13 @@ class ModelSession:
                 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
                 from pydantic_ai.providers.deepseek import DeepSeekProvider
                 from pydantic_ai.providers.openai import OpenAIProvider
+                headers = opencode_headers(config.base_url)
                 self.client = await self.resources.enter_async_context(AsyncOpenAI(
-                    api_key=config.api_key, base_url=config.base_url, max_retries=0, timeout=self.timeout))
+                    api_key=config.api_key, base_url=config.base_url, max_retries=0, timeout=self.timeout,
+                    default_headers=headers or None))
+                if headers:
+                    # Pydantic AI sends its own per-request User-Agent unless extra_headers has one.
+                    settings["extra_headers"] = {"User-Agent": headers["User-Agent"]}
                 provider = (DeepSeekProvider(openai_client=self.client) if config.provider == "deepseek"
                             else OpenAIProvider(openai_client=self.client))
                 model_class = OpenAIResponsesModel if config.api == "responses" else OpenAIChatModel

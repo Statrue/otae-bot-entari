@@ -1,15 +1,36 @@
 {
   "schema": 2,
-  "head": "f6cb85e",
+  "head": "50ddd04",
   "generated_from": {
     "first_commit": "8e1b455",
     "first_date": "2026-06-17",
     "last_date": "2026-10-28",
-    "commit_count": 384,
+    "commit_count": 385,
     "merge_commit_count": 36,
     "version_count": 51
   },
   "releases": [
+    {
+      "version": "v1.37.3",
+      "date": "2026-10-28",
+      "from": "2026-10-28",
+      "to": "2026-10-28",
+      "title": "帮助图插画新增 9 幅",
+      "summary": "/help、/更新日志、/状态、/统计 共用的插画图库从 10 幅增至 19 幅。",
+      "tags": [
+        "框架"
+      ],
+      "highlights": [
+        {
+          "kind": "feat",
+          "date": "2026-10-28",
+          "text": "插画图库新增 9 幅（头顶玩偶、酒吧、抱兔子、月夜浴衣、红色贝雷帽、圣诞蛋糕、制服、小恶魔、旗袍），/help、/更新日志、/状态、/统计 的卡片底图随机范围同步扩大；每幅都按人物位置标好了裁切焦点。",
+          "commits": [
+            "50ddd04"
+          ]
+        }
+      ]
+    },
     {
       "version": "v1.37.2",
       "date": "2026-10-28",

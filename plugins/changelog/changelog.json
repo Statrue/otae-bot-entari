@@ -1,15 +1,36 @@
 {
   "schema": 2,
-  "head": "4834cc7",
+  "head": "f6cb85e",
   "generated_from": {
     "first_commit": "8e1b455",
     "first_date": "2026-06-17",
-    "last_date": "2026-10-27",
-    "commit_count": 383,
+    "last_date": "2026-10-28",
+    "commit_count": 384,
     "merge_commit_count": 36,
-    "version_count": 50
+    "version_count": 51
   },
   "releases": [
+    {
+      "version": "v1.37.2",
+      "date": "2026-10-28",
+      "from": "2026-10-28",
+      "to": "2026-10-28",
+      "title": "OpenCode Go 请求补 session 头",
+      "summary": "访问 OpenCode 推理基址时自动带上稳定的 x-opencode-session 与专用 User-Agent，避免 MissingSessionID。",
+      "tags": [
+        "HYW"
+      ],
+      "highlights": [
+        {
+          "kind": "fix",
+          "date": "2026-10-28",
+          "text": "hyw-frontier 对 OpenCode 基址的兼容客户端补上稳定 session 头与 hyw-frontier 专用 UA。",
+          "commits": [
+            "f6cb85e"
+          ]
+        }
+      ]
+    },
     {
       "version": "v1.37.1",
       "date": "2026-10-27",
